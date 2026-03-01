@@ -2,60 +2,116 @@ package tui
 
 import (
 	"fmt"
-	"strings"
+	"io"
 
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mbency/lazyworktree/internal/model"
 )
 
+// WorktreeItem wraps a model.Worktree for use with the bubbles list.
+type WorktreeItem struct {
+	Worktree model.Worktree
+}
+
+func (w WorktreeItem) FilterValue() string { return w.Worktree.Branch }
+
+// worktreeDelegate renders worktree items in the list.
+type worktreeDelegate struct {
+	focused bool
+}
+
+func (d *worktreeDelegate) Height() int                               { return 1 }
+func (d *worktreeDelegate) Spacing() int                              { return 0 }
+func (d *worktreeDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd   { return nil }
+
+func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	wt, ok := item.(WorktreeItem)
+	if !ok {
+		return
+	}
+
+	marker := blankMarker.String()
+	if wt.Worktree.IsCurrent {
+		marker = currentMarker.String()
+	}
+
+	row := fmt.Sprintf("%s %s", marker, wt.Worktree.Branch)
+	if wt.Worktree.IsDirty {
+		row += " " + dirtyStyle.Render("*")
+	}
+
+	isSelected := index == m.Index()
+	if isSelected {
+		if d.focused {
+			row = highlightStyle.Width(m.Width()).Render(row)
+		} else {
+			row = inactiveHighlightStyle.Width(m.Width()).Render(row)
+		}
+	}
+
+	fmt.Fprint(w, row)
+}
+
+// WorktreeList is a thin wrapper around list.Model for worktrees.
 type WorktreeList struct {
-	items  []model.Worktree
-	cursor int
-	width  int
-	height int
+	list     list.Model
+	delegate *worktreeDelegate
+	items    []model.Worktree // keep original items for lookup
 }
 
 func NewWorktreeList() WorktreeList {
-	return WorktreeList{}
+	d := &worktreeDelegate{}
+	l := list.New(nil, d, 0, 0)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+	l.SetShowFilter(false)
+	l.SetFilteringEnabled(true)
+	l.SetShowPagination(false)
+	l.DisableQuitKeybindings()
+	l.KeyMap.ShowFullHelp.SetEnabled(false)
+	l.KeyMap.CloseFullHelp.SetEnabled(false)
+	// Remove conflicting key bindings (d=next page conflicts with delete)
+	l.KeyMap.NextPage.SetKeys("right", "l", "pgdown", "f")
+	l.KeyMap.PrevPage.SetKeys("left", "h", "pgup", "b", "u")
+	l.Styles.NoItems = dimStyle
+	return WorktreeList{list: l, delegate: d}
 }
 
-func (w *WorktreeList) SetItems(items []model.Worktree) {
+func (w *WorktreeList) SetItems(items []model.Worktree) tea.Cmd {
 	w.items = items
-	if w.cursor >= len(items) && len(items) > 0 {
-		w.cursor = len(items) - 1
+	listItems := make([]list.Item, len(items))
+	for i, wt := range items {
+		listItems[i] = WorktreeItem{Worktree: wt}
 	}
+	return w.list.SetItems(listItems)
 }
 
 func (w *WorktreeList) SetSize(width, height int) {
-	w.width = width
-	w.height = height
+	w.list.SetSize(width, height)
 }
 
-func (w *WorktreeList) MoveUp() {
-	if w.cursor > 0 {
-		w.cursor--
-	}
+func (w *WorktreeList) Update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	w.list, cmd = w.list.Update(msg)
+	return cmd
 }
 
-func (w *WorktreeList) MoveDown() {
-	if w.cursor < len(w.items)-1 {
-		w.cursor++
-	}
-}
-
-func (w *WorktreeList) SelectedIndex() int {
-	return w.cursor
-}
-
-func (w *WorktreeList) Cursor() int {
-	return w.cursor
+func (w *WorktreeList) Index() int {
+	return w.list.Index()
 }
 
 func (w *WorktreeList) Selected() *model.Worktree {
-	if len(w.items) == 0 {
+	item := w.list.SelectedItem()
+	if item == nil {
 		return nil
 	}
-	return &w.items[w.cursor]
+	if wt, ok := item.(WorktreeItem); ok {
+		return &wt.Worktree
+	}
+	return nil
 }
 
 func (w *WorktreeList) FindByBranch(branch string) *model.Worktree {
@@ -67,41 +123,23 @@ func (w *WorktreeList) FindByBranch(branch string) *model.Worktree {
 	return nil
 }
 
+func (w *WorktreeList) Select(index int) {
+	w.list.Select(index)
+}
+
+func (w *WorktreeList) IsFiltering() bool {
+	return w.list.SettingFilter()
+}
+
+func (w *WorktreeList) FilterValue() string {
+	return w.list.FilterInput.Value()
+}
+
 func (w *WorktreeList) View(focused bool) string {
-	if len(w.items) == 0 {
-		return dimStyle.Render("  No worktrees found. Press 'n' to create one.")
+	w.delegate.focused = focused
+	if len(w.list.Items()) == 0 && !w.list.SettingFilter() {
+		empty := dimStyle.Render("  No worktrees found. Press 'n' to create one.")
+		return lipgloss.NewStyle().Width(w.list.Width()).Height(w.list.Height()).Render(empty)
 	}
-
-	var rows []string
-
-	for i, wt := range w.items {
-		marker := blankMarker.String()
-		if wt.IsCurrent {
-			marker = currentMarker.String()
-		}
-
-		// Compact format for narrow column: marker + branch + dirty indicator.
-		// Commit details are shown in the HEAD Commit pane.
-		row := fmt.Sprintf("%s %s", marker, wt.Branch)
-
-		if wt.IsDirty {
-			row += " " + dirtyStyle.Render("*")
-		}
-
-		if i == w.cursor && focused {
-			row = highlightStyle.Width(w.width).Render(row)
-		}
-
-		rows = append(rows, row)
-	}
-
-	content := strings.Join(rows, "\n")
-
-	visibleHeight := w.height
-	lineCount := len(rows)
-	if lineCount < visibleHeight {
-		content += strings.Repeat("\n", visibleHeight-lineCount)
-	}
-
-	return lipgloss.NewStyle().Width(w.width).Render(content)
+	return w.list.View()
 }

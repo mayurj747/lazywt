@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mbency/lazyworktree/internal/config"
@@ -52,9 +54,19 @@ type App struct {
 	confirmPrompt string
 	commitLabel   string // branch/worktree name shown in the commit pane title
 	lastCursor    int
-	lastClickTime time.Time  // for double-click detection
+	showCommit     bool
+	lastClickTime  time.Time // for double-click detection
 	lastClickPanel Panel
 	lastClickRow   int
+
+	// Keymaps per panel
+	wtKeys     worktreeKeyMap
+	branchKeys branchKeyMap
+	commitKeys commitKeyMap
+	cmdKeys    cmdKeyMap
+
+	// Help bubble for the status bar
+	help help.Model
 }
 
 type worktreesLoadedMsg struct {
@@ -76,6 +88,9 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 	ti.Placeholder = "branch name"
 	ti.Prompt = "branch> "
 
+	h := help.New()
+	h.ShortSeparator = "  "
+
 	return App{
 		list:          NewWorktreeList(),
 		branchList:    NewBranchList(),
@@ -90,6 +105,11 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 		textInput:     ti,
 		confirmPrompt: "y/n",
 		lastCursor:    -1,
+		wtKeys:        newWorktreeKeyMap(),
+		branchKeys:    newBranchKeyMap(),
+		commitKeys:    newCommitKeyMap(),
+		cmdKeys:       newCmdKeyMap(),
+		help:          h,
 	}
 }
 
@@ -102,6 +122,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		a.help.Width = a.width
 		a.redistributePanels()
 		return a, nil
 
@@ -112,9 +133,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleMouse(msg)
 
 	case worktreesLoadedMsg:
-		a.list.SetItems(msg.worktrees)
+		cmd := a.list.SetItems(msg.worktrees)
 		a.branchList.SetWorktrees(msg.worktrees)
 		var cmds []tea.Cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		if a.lastCursor == -1 && len(msg.worktrees) > 0 {
 			a.lastCursor = 0
 			cmds = append(cmds, a.fireOnSwitch())
@@ -156,64 +180,66 @@ func (a App) View() string {
 	topHeight, cmdHeight := a.panelHeights()
 	col1W, col2W, col3W := a.colWidths()
 
-	// Border selection
-	col1Border := blurredBorder
-	col2Border := blurredBorder
-	col3Border := blurredBorder
-	cmdBorder := blurredBorder
+	// Border color per panel
+	col1Color := blurredBorderColor
+	col2Color := blurredBorderColor
+	cmdColor := blurredBorderColor
 
 	switch a.focused {
 	case WorktreesPanel:
-		col1Border = focusedBorder
+		col1Color = focusedBorderColor
 	case BranchesPanel:
-		col2Border = focusedBorder
-	case CommitPanel:
-		col3Border = focusedBorder
+		col2Color = focusedBorderColor
 	case CmdPanel:
-		cmdBorder = focusedBorder
+		cmdColor = focusedBorderColor
 	}
 
-	col1 := col1Border.
-		Width(col1W-2).
-		Height(topHeight).
-		Render(titleStyle.Render(" Worktrees") + "\n" + a.list.View(a.focused == WorktreesPanel))
+	// Determine titles (show filter prompt when filtering)
+	wtTitle := "Worktrees"
+	if a.focused == WorktreesPanel && a.list.IsFiltering() {
+		wtTitle = "Filter: " + a.list.FilterValue()
+	}
+	brTitle := "Branches"
+	if a.focused == BranchesPanel && a.branchList.IsFiltering() {
+		brTitle = "Filter: " + a.branchList.FilterValue()
+	}
 
-	col2 := col2Border.
-		Width(col2W-2).
-		Height(topHeight).
-		Render(titleStyle.Render(" Branches") + "\n" + a.branchList.View(a.focused == BranchesPanel))
+	col1 := renderTitledPanel(col1Color, wtTitle, a.list.View(a.focused == WorktreesPanel), col1W, topHeight)
+	col2 := renderTitledPanel(col2Color, brTitle, a.branchList.View(a.focused == BranchesPanel), col2W, topHeight)
 
-	col3 := col3Border.
-		Width(col3W-2).
-		Height(topHeight).
-		Render(titleStyle.Render(" HEAD: "+a.commitLabel) + "\n" + a.commitView.View())
+	var topRow string
+	if a.showCommit {
+		col3Color := blurredBorderColor
+		if a.focused == CommitPanel {
+			col3Color = focusedBorderColor
+		}
+		col3 := renderTitledPanel(col3Color, "HEAD: "+a.commitLabel, a.commitView.View(), col3W, topHeight)
+		topRow = lipgloss.JoinHorizontal(lipgloss.Top, col1, col2, col3)
+	} else {
+		topRow = lipgloss.JoinHorizontal(lipgloss.Top, col1, col2)
+	}
 
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, col1, col2, col3)
-
-	cmdPanel := cmdBorder.
-		Width(a.width-2).
-		Height(cmdHeight).
-		Render(titleStyle.Render(" Command Output") + "\n" + a.cmdPane.View())
+	cmdPanel := renderTitledPanel(cmdColor, "Command Output", a.cmdPane.View(), a.width, cmdHeight)
 
 	status := a.statusLine()
 
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, cmdPanel, status)
 }
 
-// statusLine returns the bottom status bar showing shortcuts for the focused panel.
+// statusLine renders the help bubble with the focused panel's keymap.
 func (a *App) statusLine() string {
-	var keys string
+	var km help.KeyMap
 	switch a.focused {
 	case WorktreesPanel:
-		keys = "enter/o: open  n: new  d: delete  p: prune  v: details  r: refresh  ?: help"
+		km = a.wtKeys
 	case BranchesPanel:
-		keys = "enter/o: open/create worktree  r: refresh  ?: help"
+		km = a.branchKeys
 	case CommitPanel:
-		keys = "j/k: scroll  ?: help"
+		km = a.commitKeys
 	case CmdPanel:
-		keys = "j/k: scroll  c: clear  ?: help"
+		km = a.cmdKeys
 	}
-	return dimStyle.Width(a.width).Render(" " + keys)
+	return " " + a.help.View(km)
 }
 
 // --- Key handling ---
@@ -246,6 +272,14 @@ func (a *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 	}
 
+	// When a list is filtering, forward all keys to that list
+	if a.focused == WorktreesPanel && a.list.IsFiltering() {
+		return a.forwardToWorktreeList(msg)
+	}
+	if a.focused == BranchesPanel && a.branchList.IsFiltering() {
+		return a.forwardToBranchList(msg)
+	}
+
 	if msg.Type == tea.KeyTab {
 		cmd := a.cycleFocus()
 		return a, cmd
@@ -269,138 +303,125 @@ func (a *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyK) {
-		oldCursor := a.list.Cursor()
-		a.list.MoveUp()
-		if a.list.Cursor() != oldCursor {
-			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
-		}
-		return a, nil
-	}
-	if msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyJ) {
-		oldCursor := a.list.Cursor()
-		a.list.MoveDown()
-		if a.list.Cursor() != oldCursor {
-			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
-		}
-		return a, nil
-	}
+	km := a.wtKeys
 
-	if msg.Type == tea.KeyEnter {
+	switch {
+	case key.Matches(msg, km.Open):
 		return a, a.handleOpen()
+	case key.Matches(msg, km.Quit):
+		return a, tea.Quit
+	case key.Matches(msg, km.Refresh):
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+	case key.Matches(msg, km.New):
+		a.textInput.SetValue("")
+		a.state = StateCreating
+		a.textInput.Focus()
+		return a, nil
+	case key.Matches(msg, km.Delete):
+		return a.handleDeleteRequest()
+	case key.Matches(msg, km.Prune):
+		a.state = StateConfirmingPrune
+		a.confirmPrompt = "prune stale worktrees? (y/n)"
+		return a, nil
+	case key.Matches(msg, km.ShowCommit):
+		return a.toggleCommitPane()
+	case key.Matches(msg, km.Details):
+		a.state = StateViewingDetails
+		return a, nil
+	case key.Matches(msg, km.Help):
+		a.state = StateHelp
+		return a, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case keyQ:
-			return a, tea.Quit
-		case keyR:
-			return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
-		case keyN:
-			a.textInput.SetValue("")
-			a.state = StateCreating
-			a.textInput.Focus()
-			return a, nil
-		case keyD:
-			return a.handleDeleteRequest()
-		case keyO:
-			return a, a.handleOpen()
-		case keyP:
-			a.state = StateConfirmingPrune
-			a.confirmPrompt = "prune stale worktrees? (y/n)"
-			return a, nil
-		case keyV:
-			a.state = StateViewingDetails
-			return a, nil
-		case keyQuestion:
-			a.state = StateHelp
-			return a, nil
-		}
-	}
+	// Forward to list for cursor movement, filtering, pagination
+	return a.forwardToWorktreeList(msg)
+}
 
-	return a, nil
+func (a *App) forwardToWorktreeList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	oldIdx := a.list.Index()
+	cmd := a.list.Update(msg)
+	newIdx := a.list.Index()
+	if newIdx != oldIdx {
+		return a, tea.Batch(cmd, a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
+	}
+	return a, cmd
 }
 
 func (a *App) handleBranchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyK) {
-		oldCursor := a.branchList.Cursor()
-		a.branchList.MoveUp()
-		if a.branchList.Cursor() != oldCursor {
-			return a, a.loadCommitForSelectedBranch()
-		}
-		return a, nil
-	}
-	if msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyJ) {
-		oldCursor := a.branchList.Cursor()
-		a.branchList.MoveDown()
-		if a.branchList.Cursor() != oldCursor {
-			return a, a.loadCommitForSelectedBranch()
-		}
-		return a, nil
-	}
+	km := a.branchKeys
 
-	if msg.Type == tea.KeyEnter {
+	switch {
+	case key.Matches(msg, km.Open):
 		return a.handleBranchOpen()
+	case key.Matches(msg, km.Quit):
+		return a, tea.Quit
+	case key.Matches(msg, km.Refresh):
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+	case key.Matches(msg, km.ShowCommit):
+		return a.toggleCommitPane()
+	case key.Matches(msg, km.Help):
+		a.state = StateHelp
+		return a, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case keyQ:
-			return a, tea.Quit
-		case keyR:
-			return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
-		case keyO:
-			return a.handleBranchOpen()
-		case keyQuestion:
-			a.state = StateHelp
-			return a, nil
-		}
-	}
+	// Forward to list for cursor movement, filtering, pagination
+	return a.forwardToBranchList(msg)
+}
 
-	return a, nil
+func (a *App) forwardToBranchList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	oldIdx := a.branchList.Index()
+	cmd := a.branchList.Update(msg)
+	newIdx := a.branchList.Index()
+	if newIdx != oldIdx {
+		return a, tea.Batch(cmd, a.loadCommitForSelectedBranch())
+	}
+	return a, cmd
 }
 
 func (a *App) handleCommitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyK) {
+	km := a.commitKeys
+
+	if msg.Type == tea.KeyUp || msg.String() == "k" {
 		a.commitView.ScrollUp()
 		return a, nil
 	}
-	if msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyJ) {
+	if msg.Type == tea.KeyDown || msg.String() == "j" {
 		a.commitView.ScrollDown()
 		return a, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case keyQ:
-			return a, tea.Quit
-		case keyQuestion:
-			a.state = StateHelp
-			return a, nil
-		}
+	switch {
+	case key.Matches(msg, km.Quit):
+		return a, tea.Quit
+	case key.Matches(msg, km.Help):
+		a.state = StateHelp
+		return a, nil
 	}
 
 	return a, nil
 }
 
 func (a *App) handleCmdPaneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyK) {
+	km := a.cmdKeys
+
+	if msg.Type == tea.KeyUp || msg.String() == "k" {
 		a.cmdPane.ScrollUp()
 		return a, nil
 	}
-	if msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyJ) {
+	if msg.Type == tea.KeyDown || msg.String() == "j" {
 		a.cmdPane.ScrollDown()
 		return a, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case keyQ:
-			return a, tea.Quit
-		case keyC:
-			a.cmdPane.Clear()
-			return a, nil
-		}
+	switch {
+	case key.Matches(msg, km.Clear):
+		a.cmdPane.Clear()
+		return a, nil
+	case key.Matches(msg, km.Quit):
+		return a, tea.Quit
+	case key.Matches(msg, km.Help):
+		a.state = StateHelp
+		return a, nil
 	}
 
 	return a, nil
@@ -465,7 +486,7 @@ func (a *App) handleConfirmPruneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyQ) {
+	if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyEsc || msg.String() == "q" {
 		a.state = StateNormal
 		return a, nil
 	}
@@ -473,7 +494,7 @@ func (a *App) handleDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a *App) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == keyQ) {
+	if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyEsc || msg.String() == "q" {
 		a.state = StateNormal
 		return a, nil
 	}
@@ -489,8 +510,12 @@ func (a *App) cycleFocus() tea.Cmd {
 		a.cmdPane.SetFocused(false)
 		return a.loadCommitForSelectedBranch()
 	case BranchesPanel:
-		a.focused = CommitPanel
-		a.cmdPane.SetFocused(false)
+		if a.showCommit {
+			a.focused = CommitPanel
+		} else {
+			a.focused = CmdPanel
+			a.cmdPane.SetFocused(true)
+		}
 		return nil
 	case CommitPanel:
 		a.focused = CmdPanel
@@ -504,7 +529,7 @@ func (a *App) cycleFocus() tea.Cmd {
 	return nil
 }
 
-// cycleFocusReverse moves focus backward: Worktrees ← Branches ← Commit ← CmdPanel.
+// cycleFocusReverse moves focus backward through panels, skipping commit if hidden.
 func (a *App) cycleFocusReverse() tea.Cmd {
 	switch a.focused {
 	case WorktreesPanel:
@@ -520,18 +545,45 @@ func (a *App) cycleFocusReverse() tea.Cmd {
 		a.cmdPane.SetFocused(false)
 		return a.loadCommitForSelectedBranch()
 	case CmdPanel:
-		a.focused = CommitPanel
+		if a.showCommit {
+			a.focused = CommitPanel
+		} else {
+			a.focused = BranchesPanel
+		}
 		a.cmdPane.SetFocused(false)
 		return nil
 	}
 	return nil
 }
 
+func (a *App) toggleCommitPane() (tea.Model, tea.Cmd) {
+	a.showCommit = !a.showCommit
+	if !a.showCommit && a.focused == CommitPanel {
+		a.focused = WorktreesPanel
+	}
+	a.redistributePanels()
+	if a.showCommit {
+		if a.focused == WorktreesPanel {
+			return a, a.loadCommitForSelectedWorktree()
+		}
+		return a, a.loadCommitForSelectedBranch()
+	}
+	return a, nil
+}
+
 // --- Layout ---
 
 func (a *App) colWidths() (int, int, int) {
 	if a.width < 12 {
-		return 4, 4, 4
+		if a.showCommit {
+			return 4, 4, 4
+		}
+		return 6, 6, 0
+	}
+	if !a.showCommit {
+		col1W := a.width / 2
+		col2W := a.width - col1W
+		return col1W, col2W, 0
 	}
 	col1W := a.width * 22 / 100
 	col2W := a.width * 22 / 100
@@ -543,11 +595,13 @@ func (a *App) redistributePanels() {
 	topHeight, cmdHeight := a.panelHeights()
 	col1W, col2W, col3W := a.colWidths()
 
-	// Each panel has 1 title line, so subtract 1 from the content height.
-	a.list.SetSize(col1W-4, topHeight-1)
-	a.branchList.SetSize(col2W-4, topHeight-1)
-	a.commitView.SetSize(col3W-4, topHeight-1)
-	a.cmdPane.SetSize(a.width-4, cmdHeight-1)
+	// Title is embedded in the border, so content gets the full height.
+	a.list.SetSize(col1W-4, topHeight)
+	a.branchList.SetSize(col2W-4, topHeight)
+	if a.showCommit {
+		a.commitView.SetSize(col3W-4, topHeight)
+	}
+	a.cmdPane.SetSize(a.width-4, cmdHeight)
 }
 
 func (a *App) panelHeights() (int, int) {
@@ -860,8 +914,15 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	a.sendOutput("stdout", "git worktree add -b "+branch+" "+wtPath, "git")
-	err := git.Create(a.repoPath, wtPath, branch, "")
+	// If branch already exists, check it out into the worktree; otherwise create it.
+	var err error
+	if git.BranchExists(a.repoPath, branch) {
+		a.sendOutput("stdout", "git worktree add "+wtPath+" "+branch, "git")
+		err = git.Create(a.repoPath, wtPath, "", branch)
+	} else {
+		a.sendOutput("stdout", "git worktree add -b "+branch+" "+wtPath, "git")
+		err = git.Create(a.repoPath, wtPath, branch, "")
+	}
 	if err != nil {
 		a.sendOutput("stderr", err.Error(), "git")
 		a.textInput.Reset()
@@ -959,7 +1020,11 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case msg.X < col1W+col2W:
 			hovered = BranchesPanel
 		default:
-			hovered = CommitPanel
+			if a.showCommit {
+				hovered = CommitPanel
+			} else {
+				hovered = BranchesPanel
+			}
 		}
 	} else {
 		hovered = CmdPanel
@@ -978,27 +1043,27 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 // mouseScroll scrolls a panel by dir (-1 = up, +1 = down).
-// For list panels the cursor moves; for viewport panels the content scrolls.
+// For list panels the cursor moves via CursorUp/CursorDown; for viewport panels the content scrolls.
 func (a *App) mouseScroll(panel Panel, dir int) (tea.Model, tea.Cmd) {
 	switch panel {
 	case WorktreesPanel:
-		old := a.list.cursor
+		oldIdx := a.list.Index()
 		if dir < 0 {
-			a.list.MoveUp()
+			a.list.list.CursorUp()
 		} else {
-			a.list.MoveDown()
+			a.list.list.CursorDown()
 		}
-		if a.list.cursor != old {
+		if a.list.Index() != oldIdx {
 			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
 		}
 	case BranchesPanel:
-		old := a.branchList.cursor
+		oldIdx := a.branchList.Index()
 		if dir < 0 {
-			a.branchList.MoveUp()
+			a.branchList.list.CursorUp()
 		} else {
-			a.branchList.MoveDown()
+			a.branchList.list.CursorDown()
 		}
-		if a.branchList.cursor != old {
+		if a.branchList.Index() != oldIdx {
 			return a, a.loadCommitForSelectedBranch()
 		}
 	case CommitPanel:
@@ -1037,25 +1102,27 @@ func (a *App) mouseClick(panel Panel, y int) (tea.Model, tea.Cmd) {
 
 	switch panel {
 	case WorktreesPanel:
-		old := a.list.cursor
-		if contentRow >= 0 && contentRow < len(a.list.items) {
-			a.list.cursor = contentRow
+		oldIdx := a.list.Index()
+		absRow := a.list.list.Paginator.Page*a.list.list.Paginator.PerPage + contentRow
+		if contentRow >= 0 && absRow < len(a.list.list.Items()) {
+			a.list.Select(absRow)
 		}
 		if doubleClick {
 			return a, a.handleOpen()
 		}
-		if a.list.cursor != old || prevFocused != WorktreesPanel {
+		if a.list.Index() != oldIdx || prevFocused != WorktreesPanel {
 			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
 		}
 	case BranchesPanel:
-		old := a.branchList.cursor
-		if contentRow >= 0 && contentRow < len(a.branchList.branches) {
-			a.branchList.cursor = contentRow
+		oldIdx := a.branchList.Index()
+		absRow := a.branchList.list.Paginator.Page*a.branchList.list.Paginator.PerPage + contentRow
+		if contentRow >= 0 && absRow < len(a.branchList.list.Items()) {
+			a.branchList.Select(absRow)
 		}
 		if doubleClick {
 			return a.handleBranchOpen()
 		}
-		if a.branchList.cursor != old || prevFocused != BranchesPanel {
+		if a.branchList.Index() != oldIdx || prevFocused != BranchesPanel {
 			return a, a.loadCommitForSelectedBranch()
 		}
 	}
@@ -1066,41 +1133,35 @@ func (a *App) mouseClick(panel Panel, y int) (tea.Model, tea.Cmd) {
 // --- Overlay Views ---
 
 func (a *App) creatingView() string {
-	border := focusedBorder.Width(a.width - 2).Height(a.height - 4)
 	content := lipgloss.NewStyle().
 		Width(a.width - 6).
-		Height(a.height - 8).
-		Render("Create new worktree\n\n" + a.textInput.View())
+		Height(a.height - 6).
+		Render("\n" + a.textInput.View())
 
-	return border.Render(content)
+	return renderTitledPanel(focusedBorderColor, "Create Worktree", content, a.width, a.height-4)
 }
 
 func (a *App) confirmView() string {
-	border := focusedBorder.Width(a.width - 2).Height(5)
 	content := lipgloss.NewStyle().
 		Width(a.width - 6).
 		Height(3).
 		Align(lipgloss.Center).
 		Render(a.confirmPrompt)
 
-	return border.Render(content)
+	return renderTitledPanel(focusedBorderColor, "Confirm", content, a.width, 5)
 }
 
 func (a *App) detailsOverlay() string {
 	worktree := a.list.Selected()
 	if worktree == nil {
-		border := focusedBorder.Width(a.width - 2).Height(5)
 		content := lipgloss.NewStyle().
 			Width(a.width - 6).
 			Height(3).
 			Render("No worktree selected")
-		return border.Render(content)
+		return renderTitledPanel(focusedBorderColor, "Details", content, a.width, 5)
 	}
 
-	border := focusedBorder.Width(a.width - 2).Height(a.height - 4)
-
 	lines := []string{
-		"Details",
 		"",
 		"Branch:        " + worktree.Branch,
 		"Path:          " + worktree.Path,
@@ -1121,17 +1182,14 @@ func (a *App) detailsOverlay() string {
 
 	content := lipgloss.NewStyle().
 		Width(a.width - 6).
-		Height(a.height - 8).
+		Height(a.height - 6).
 		Render(strings.Join(lines, "\n"))
 
-	return border.Render(content)
+	return renderTitledPanel(focusedBorderColor, "Details", content, a.width, a.height-4)
 }
 
 func (a *App) helpOverlay() string {
-	border := focusedBorder.Width(a.width - 2).Height(a.height - 4)
-
 	lines := []string{
-		"Keybindings",
 		"",
 		"Navigation:",
 		"  j/k or ↑/↓   Move up/down in focused panel",
@@ -1154,6 +1212,11 @@ func (a *App) helpOverlay() string {
 		"  j/k or ↑/↓   Scroll",
 		"  C             Clear output",
 		"",
+		"Filtering:",
+		"  /             Start filtering in current list",
+		"  Enter         Apply filter",
+		"  Esc           Cancel/clear filter",
+		"",
 		"  ?             Toggle this help",
 		"  q             Quit",
 		"",
@@ -1162,10 +1225,10 @@ func (a *App) helpOverlay() string {
 
 	content := lipgloss.NewStyle().
 		Width(a.width - 6).
-		Height(a.height - 8).
+		Height(a.height - 6).
 		Render(strings.Join(lines, "\n"))
 
-	return border.Render(content)
+	return renderTitledPanel(focusedBorderColor, "Keybindings", content, a.width, a.height-4)
 }
 
 func boolToStr(b bool) string {
