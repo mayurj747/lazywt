@@ -79,7 +79,16 @@ type commitLoadedMsg struct {
 	content string
 }
 
-type outputLineMsg hooks.OutputLine
+type outputLineMsg struct {
+	line hooks.OutputLine
+	ch   <-chan tea.Msg // yields outputLineMsg or hookDoneMsg; nil for direct sendOutput calls
+}
+
+type hookDoneMsg struct {
+	hookName string
+	exitCode int
+	refresh  bool // whether to reload worktrees/branches after
+}
 
 func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 	ti := textinput.New()
@@ -148,7 +157,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case outputLineMsg:
-		a.cmdPane.Append(hooks.OutputLine(msg))
+		a.cmdPane.Append(msg.line)
+		if msg.ch != nil {
+			return a, listenForHookOutput(msg.ch)
+		}
+		return a, nil
+
+	case hookDoneMsg:
+		if msg.refresh {
+			return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+		}
 		return a, nil
 	}
 
@@ -660,6 +678,34 @@ func (a *App) loadCommitForSelectedBranch() tea.Cmd {
 	}
 }
 
+// --- Streaming hook helpers ---
+
+func listenForHookOutput(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+func (a *App) runHookStreaming(hookCmd, hookName string, env map[string]string, refresh bool) tea.Cmd {
+	ch := make(chan tea.Msg, 64)
+	hookExec := a.hookExec
+
+	go func() {
+		result := hookExec.RunStreaming(hookCmd, env, func(ol hooks.OutputLine) {
+			ol.Hook = hookName
+			ch <- outputLineMsg{line: ol, ch: ch}
+		})
+		ch <- hookDoneMsg{hookName: hookName, exitCode: result.ExitCode, refresh: refresh}
+		close(ch)
+	}()
+
+	return listenForHookOutput(ch)
+}
+
 // --- Action Helpers ---
 
 func (a *App) buildHookEnv(worktree *model.Worktree, action string) map[string]string {
@@ -699,6 +745,19 @@ func (a *App) sendOutput(stream, text, hook string) {
 	})
 }
 
+func (a *App) sendHookOutput(result hooks.HookResult, hookName string) {
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		if line != "" {
+			a.sendOutput("stdout", line, hookName)
+		}
+	}
+	for _, line := range strings.Split(result.Stderr, "\n") {
+		if line != "" {
+			a.sendOutput("stderr", line, hookName)
+		}
+	}
+}
+
 func (a *App) fireOnSwitch() tea.Cmd {
 	worktree := a.list.Selected()
 	if worktree == nil {
@@ -711,25 +770,7 @@ func (a *App) fireOnSwitch() tea.Cmd {
 	}
 
 	env := a.buildHookEnv(worktree, "switch")
-
-	return func() tea.Msg {
-		result := a.hookExec.Run(hook, env)
-		if result.Stdout != "" {
-			for _, line := range strings.Split(result.Stdout, "\n") {
-				if line != "" {
-					return outputLineMsg{Stream: "stdout", Text: line, Hook: "on_switch"}
-				}
-			}
-		}
-		if result.Stderr != "" {
-			for _, line := range strings.Split(result.Stderr, "\n") {
-				if line != "" {
-					return outputLineMsg{Stream: "stderr", Text: line, Hook: "on_switch"}
-				}
-			}
-		}
-		return nil
-	}
+	return a.runHookStreaming(hook, "on_switch", env, false)
 }
 
 // openWorktree fires the on_open hook for the given worktree.
@@ -741,25 +782,7 @@ func (a *App) openWorktree(wt *model.Worktree) tea.Cmd {
 	}
 
 	env := a.buildHookEnv(wt, "open")
-
-	return func() tea.Msg {
-		result := a.hookExec.Run(hook, env)
-		if result.Stdout != "" {
-			for _, line := range strings.Split(result.Stdout, "\n") {
-				if line != "" {
-					return outputLineMsg{Stream: "stdout", Text: line, Hook: "on_open"}
-				}
-			}
-		}
-		if result.Stderr != "" {
-			for _, line := range strings.Split(result.Stderr, "\n") {
-				if line != "" {
-					return outputLineMsg{Stream: "stderr", Text: line, Hook: "on_open"}
-				}
-			}
-		}
-		return nil
-	}
+	return a.runHookStreaming(hook, "on_open", env, false)
 }
 
 func (a *App) handleOpen() tea.Cmd {
@@ -822,16 +845,7 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 	if preHook != "" {
 		env := a.buildHookEnv(worktree, "delete")
 		result := a.hookExec.Run(preHook, env)
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			if line != "" {
-				a.sendOutput("stdout", line, "pre_delete")
-			}
-		}
-		for _, line := range strings.Split(result.Stderr, "\n") {
-			if line != "" {
-				a.sendOutput("stderr", line, "pre_delete")
-			}
-		}
+		a.sendHookOutput(result, "pre_delete")
 		if result.ExitCode != 0 {
 			a.sendOutput("stderr", "pre_delete hook failed, aborting", "pre_delete")
 			return a, nil
@@ -853,17 +867,7 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 	postHook := a.cfg.Hooks.PostDelete
 	if postHook != "" {
 		env := a.buildHookEnv(worktree, "delete")
-		result := a.hookExec.Run(postHook, env)
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			if line != "" {
-				a.sendOutput("stdout", line, "post_delete")
-			}
-		}
-		for _, line := range strings.Split(result.Stderr, "\n") {
-			if line != "" {
-				a.sendOutput("stderr", line, "post_delete")
-			}
-		}
+		return a, a.runHookStreaming(postHook, "post_delete", env, true)
 	}
 
 	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
@@ -885,16 +889,7 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 	if preHook != "" {
 		env := a.buildHookEnv(worktree, "create")
 		result := a.hookExec.Run(preHook, env)
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			if line != "" {
-				a.sendOutput("stdout", line, "pre_create")
-			}
-		}
-		for _, line := range strings.Split(result.Stderr, "\n") {
-			if line != "" {
-				a.sendOutput("stderr", line, "pre_create")
-			}
-		}
+		a.sendHookOutput(result, "pre_create")
 		if result.ExitCode != 0 {
 			a.sendOutput("stderr", "pre_create hook failed, aborting", "pre_create")
 			a.textInput.Reset()
@@ -917,23 +912,14 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	a.textInput.Reset()
+
 	postHook := a.cfg.Hooks.PostCreate
 	if postHook != "" {
 		env := a.buildHookEnv(worktree, "create")
-		result := a.hookExec.Run(postHook, env)
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			if line != "" {
-				a.sendOutput("stdout", line, "post_create")
-			}
-		}
-		for _, line := range strings.Split(result.Stderr, "\n") {
-			if line != "" {
-				a.sendOutput("stderr", line, "post_create")
-			}
-		}
+		return a, a.runHookStreaming(postHook, "post_create", env, true)
 	}
 
-	a.textInput.Reset()
 	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
 }
 
@@ -944,16 +930,7 @@ func (a *App) runPruneAction() (tea.Model, tea.Cmd) {
 	if preHook != "" {
 		env := a.buildHookEnv(nil, "prune")
 		result := a.hookExec.Run(preHook, env)
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			if line != "" {
-				a.sendOutput("stdout", line, "pre_prune")
-			}
-		}
-		for _, line := range strings.Split(result.Stderr, "\n") {
-			if line != "" {
-				a.sendOutput("stderr", line, "pre_prune")
-			}
-		}
+		a.sendHookOutput(result, "pre_prune")
 		if result.ExitCode != 0 {
 			a.sendOutput("stderr", "pre_prune hook failed, aborting", "pre_prune")
 			return a, nil
@@ -970,17 +947,7 @@ func (a *App) runPruneAction() (tea.Model, tea.Cmd) {
 	postHook := a.cfg.Hooks.PostPrune
 	if postHook != "" {
 		env := a.buildHookEnv(nil, "prune")
-		result := a.hookExec.Run(postHook, env)
-		for _, line := range strings.Split(result.Stdout, "\n") {
-			if line != "" {
-				a.sendOutput("stdout", line, "post_prune")
-			}
-		}
-		for _, line := range strings.Split(result.Stderr, "\n") {
-			if line != "" {
-				a.sendOutput("stderr", line, "post_prune")
-			}
-		}
+		return a, a.runHookStreaming(postHook, "post_prune", env, true)
 	}
 
 	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())

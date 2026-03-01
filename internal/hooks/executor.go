@@ -1,10 +1,12 @@
 package hooks
 
 import (
+	"bufio"
 	"bytes"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -78,6 +80,73 @@ func (e *Executor) Run(hookCmd string, env map[string]string) HookResult {
 func (e *Executor) RunPre(hookCmd string, env map[string]string) (HookResult, bool) {
 	result := e.Run(hookCmd, env)
 	return result, result.ExitCode != 0
+}
+
+// RunStreaming executes a hook command and streams stdout/stderr line-by-line
+// via the onLine callback. Returns a HookResult with ExitCode/Err only
+// (Stdout/Stderr fields are left empty).
+func (e *Executor) RunStreaming(hookCmd string, env map[string]string, onLine func(OutputLine)) HookResult {
+	if hookCmd == "" {
+		return HookResult{}
+	}
+
+	shellParts := strings.Fields(e.Shell)
+	args := append(shellParts[1:], hookCmd)
+	cmd := exec.Command(shellParts[0], args...)
+	cmd.Env = buildEnv(env)
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return HookResult{ExitCode: -1, Err: err}
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return HookResult{ExitCode: -1, Err: err}
+	}
+
+	if err := cmd.Start(); err != nil {
+		return HookResult{ExitCode: -1, Err: err}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			onLine(OutputLine{
+				Stream:    "stdout",
+				Text:      scanner.Text(),
+				Timestamp: time.Now(),
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			onLine(OutputLine{
+				Stream:    "stderr",
+				Text:      scanner.Text(),
+				Timestamp: time.Now(),
+			})
+		}
+	}()
+
+	wg.Wait()
+
+	exitCode := 0
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return HookResult{ExitCode: -1, Err: err}
+		}
+	}
+
+	return HookResult{ExitCode: exitCode}
 }
 
 func buildEnv(vars map[string]string) []string {
