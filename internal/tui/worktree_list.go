@@ -60,6 +60,15 @@ func (w *WorktreeList) Selected() *model.Worktree {
 	return &w.items[w.cursor]
 }
 
+func (w *WorktreeList) FindByBranch(branch string) *model.Worktree {
+	for i := range w.items {
+		if w.items[i].Branch == branch {
+			return &w.items[i]
+		}
+	}
+	return nil
+}
+
 func (w *WorktreeList) View() string {
 	if len(w.items) == 0 {
 		return dimStyle.Render("  No worktrees found. Press 'n' to create one.")
