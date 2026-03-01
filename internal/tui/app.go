@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
@@ -13,6 +12,7 @@ import (
 	"github.com/mbency/lazyworktree/internal/git"
 	"github.com/mbency/lazyworktree/internal/hooks"
 	"github.com/mbency/lazyworktree/internal/model"
+	"github.com/mbency/lazyworktree/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -65,8 +65,6 @@ type App struct {
 	commitKeys commitKeyMap
 	cmdKeys    cmdKeyMap
 
-	// Help bubble for the status bar
-	help help.Model
 }
 
 type worktreesLoadedMsg struct {
@@ -88,9 +86,6 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 	ti.Placeholder = "branch name"
 	ti.Prompt = "branch> "
 
-	h := help.New()
-	h.ShortSeparator = "  "
-
 	return App{
 		list:          NewWorktreeList(),
 		branchList:    NewBranchList(),
@@ -109,7 +104,6 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 		branchKeys:    newBranchKeyMap(),
 		commitKeys:    newCommitKeyMap(),
 		cmdKeys:       newCmdKeyMap(),
-		help:          h,
 	}
 }
 
@@ -122,7 +116,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		a.help.Width = a.width
 		a.redistributePanels()
 		return a, nil
 
@@ -226,20 +219,15 @@ func (a App) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, cmdPanel, status)
 }
 
-// statusLine renders the help bubble with the focused panel's keymap.
+// statusLine renders the project path (left) and version (right).
 func (a *App) statusLine() string {
-	var km help.KeyMap
-	switch a.focused {
-	case WorktreesPanel:
-		km = a.wtKeys
-	case BranchesPanel:
-		km = a.branchKeys
-	case CommitPanel:
-		km = a.commitKeys
-	case CmdPanel:
-		km = a.cmdKeys
+	left := " " + a.projectRoot
+	right := version.Version + " "
+	gap := a.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
 	}
-	return " " + a.help.View(km)
+	return dimStyle.Render(left + strings.Repeat(" ", gap) + right)
 }
 
 // --- Key handling ---

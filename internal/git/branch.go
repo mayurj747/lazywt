@@ -22,6 +22,12 @@ func ListBranches(repoPath string) ([]string, error) {
 	return branches, nil
 }
 
+// BranchExists checks whether a local branch with the given name exists.
+func BranchExists(repoPath, branch string) bool {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "refs/heads/"+branch)
+	return cmd.Run() == nil
+}
+
 // ShowHead returns the full `git show` output for a given worktree or branch.
 // If worktreePath is non-empty, it runs `git show HEAD` at that path.
 // Otherwise it runs `git show <branch>` from repoPath.

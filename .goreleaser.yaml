@@ -3,6 +3,8 @@ version: 2
 builds:
   - main: ./cmd/lw/
     binary: lw
+    ldflags:
+      - -s -w -X github.com/mbency/lazyworktree/internal/version.Version={{.Version}}
     env:
       - CGO_ENABLED=0
     goos:

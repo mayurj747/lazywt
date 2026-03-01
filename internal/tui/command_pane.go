@@ -66,7 +66,11 @@ func (c *CommandPane) refreshContent() {
 			styled = line.Text
 		}
 
-		lines = append(lines, fmt.Sprintf("%s %s", prefix, styled))
+		entry := fmt.Sprintf("%s %s", prefix, styled)
+		if c.width > 0 {
+			entry = lipgloss.NewStyle().Width(c.width).Render(entry)
+		}
+		lines = append(lines, entry)
 	}
 	c.viewport.SetContent(strings.Join(lines, "\n"))
 }
