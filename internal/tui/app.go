@@ -3,6 +3,7 @@ package tui
 import (
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
@@ -44,11 +45,16 @@ type App struct {
 	width         int
 	height        int
 	cfg           *config.Config
-	repoPath      string
+	repoPath      string // bare repo or git dir (for git commands)
+	projectRoot   string // lw project root (for placing worktrees)
 	hookExec      *hooks.Executor
 	textInput     textinput.Model
 	confirmPrompt string
+	commitLabel   string // branch/worktree name shown in the commit pane title
 	lastCursor    int
+	lastClickTime time.Time  // for double-click detection
+	lastClickPanel Panel
+	lastClickRow   int
 }
 
 type worktreesLoadedMsg struct {
@@ -65,13 +71,13 @@ type commitLoadedMsg struct {
 
 type outputLineMsg hooks.OutputLine
 
-func NewApp(cfg *config.Config, repoPath string) App {
+func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 	ti := textinput.New()
 	ti.Placeholder = "branch name"
 	ti.Prompt = "branch> "
 
 	return App{
-		list:          NewWorktreeList(cfg),
+		list:          NewWorktreeList(),
 		branchList:    NewBranchList(),
 		commitView:    NewCommitView(),
 		cmdPane:       NewCommandPane(),
@@ -79,6 +85,7 @@ func NewApp(cfg *config.Config, repoPath string) App {
 		state:         StateNormal,
 		cfg:           cfg,
 		repoPath:      repoPath,
+		projectRoot:   projectRoot,
 		hookExec:      hooks.NewExecutor(cfg.ShellCmd()),
 		textInput:     ti,
 		confirmPrompt: "y/n",
@@ -169,17 +176,17 @@ func (a App) View() string {
 	col1 := col1Border.
 		Width(col1W-2).
 		Height(topHeight).
-		Render(titleStyle.Render(" Worktrees") + "\n" + a.list.View())
+		Render(titleStyle.Render(" Worktrees") + "\n" + a.list.View(a.focused == WorktreesPanel))
 
 	col2 := col2Border.
 		Width(col2W-2).
 		Height(topHeight).
-		Render(titleStyle.Render(" Branches") + "\n" + a.branchList.View())
+		Render(titleStyle.Render(" Branches") + "\n" + a.branchList.View(a.focused == BranchesPanel))
 
 	col3 := col3Border.
 		Width(col3W-2).
 		Height(topHeight).
-		Render(titleStyle.Render(" HEAD Commit") + "\n" + a.commitView.View())
+		Render(titleStyle.Render(" HEAD: "+a.commitLabel) + "\n" + a.commitView.View())
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, col1, col2, col3)
 
@@ -188,7 +195,25 @@ func (a App) View() string {
 		Height(cmdHeight).
 		Render(titleStyle.Render(" Command Output") + "\n" + a.cmdPane.View())
 
-	return lipgloss.JoinVertical(lipgloss.Left, topRow, cmdPanel)
+	status := a.statusLine()
+
+	return lipgloss.JoinVertical(lipgloss.Left, topRow, cmdPanel, status)
+}
+
+// statusLine returns the bottom status bar showing shortcuts for the focused panel.
+func (a *App) statusLine() string {
+	var keys string
+	switch a.focused {
+	case WorktreesPanel:
+		keys = "enter/o: open  n: new  d: delete  p: prune  v: details  r: refresh  ?: help"
+	case BranchesPanel:
+		keys = "enter/o: open/create worktree  r: refresh  ?: help"
+	case CommitPanel:
+		keys = "j/k: scroll  ?: help"
+	case CmdPanel:
+		keys = "j/k: scroll  c: clear  ?: help"
+	}
+	return dimStyle.Width(a.width).Render(" " + keys)
 }
 
 // --- Key handling ---
@@ -223,6 +248,10 @@ func (a *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if msg.Type == tea.KeyTab {
 		cmd := a.cycleFocus()
+		return a, cmd
+	}
+	if msg.Type == tea.KeyShiftTab {
+		cmd := a.cycleFocusReverse()
 		return a, cmd
 	}
 
@@ -475,6 +504,29 @@ func (a *App) cycleFocus() tea.Cmd {
 	return nil
 }
 
+// cycleFocusReverse moves focus backward: Worktrees ← Branches ← Commit ← CmdPanel.
+func (a *App) cycleFocusReverse() tea.Cmd {
+	switch a.focused {
+	case WorktreesPanel:
+		a.focused = CmdPanel
+		a.cmdPane.SetFocused(true)
+		return nil
+	case BranchesPanel:
+		a.focused = WorktreesPanel
+		a.cmdPane.SetFocused(false)
+		return a.loadCommitForSelectedWorktree()
+	case CommitPanel:
+		a.focused = BranchesPanel
+		a.cmdPane.SetFocused(false)
+		return a.loadCommitForSelectedBranch()
+	case CmdPanel:
+		a.focused = CommitPanel
+		a.cmdPane.SetFocused(false)
+		return nil
+	}
+	return nil
+}
+
 // --- Layout ---
 
 func (a *App) colWidths() (int, int, int) {
@@ -499,7 +551,7 @@ func (a *App) redistributePanels() {
 }
 
 func (a *App) panelHeights() (int, int) {
-	usable := a.height - 4
+	usable := a.height - 4 - 1 // -1 for status line
 	if usable < 2 {
 		return 1, 1
 	}
@@ -538,6 +590,7 @@ func (a *App) loadCommitForSelectedWorktree() tea.Cmd {
 	if wt == nil {
 		return nil
 	}
+	a.commitLabel = wt.Branch
 	path := wt.Path
 	repoPath := a.repoPath
 	return func() tea.Msg {
@@ -554,6 +607,7 @@ func (a *App) loadCommitForSelectedBranch() tea.Cmd {
 	if branch == "" {
 		return nil
 	}
+	a.commitLabel = branch
 	repoPath := a.repoPath
 	return func() tea.Msg {
 		content, err := git.ShowHead(repoPath, "", branch)
@@ -596,9 +650,10 @@ func (a *App) buildHookEnv(worktree *model.Worktree, action string) map[string]s
 
 func (a *App) sendOutput(stream, text, hook string) {
 	a.cmdPane.Append(hooks.OutputLine{
-		Stream: stream,
-		Text:   text,
-		Hook:   hook,
+		Stream:    stream,
+		Text:      text,
+		Hook:      hook,
+		Timestamp: time.Now(),
 	})
 }
 
@@ -776,7 +831,7 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 	a.state = StateNormal
 
 	defaultPath := a.cfg.DefaultPathDir()
-	wtPath := filepath.Join(a.repoPath, defaultPath, branch)
+	wtPath := filepath.Join(a.projectRoot, defaultPath, branch)
 
 	worktree := &model.Worktree{
 		Path:   wtPath,
@@ -964,18 +1019,30 @@ func (a *App) mouseScroll(panel Panel, dir int) (tea.Model, tea.Cmd) {
 
 // mouseClick focuses the clicked panel and moves the cursor to the clicked row
 // for list panels. contentRow = y - 2 (1 for top border + 1 for title line).
+// Double-clicking a worktree opens it; double-clicking a branch opens its
+// worktree or creates one if none exists.
 func (a *App) mouseClick(panel Panel, y int) (tea.Model, tea.Cmd) {
 	prevFocused := a.focused
 	a.focused = panel
 	a.cmdPane.SetFocused(panel == CmdPanel)
 
 	contentRow := y - 2
+	now := time.Now()
+	doubleClick := panel == a.lastClickPanel &&
+		contentRow == a.lastClickRow &&
+		now.Sub(a.lastClickTime) < 400*time.Millisecond
+	a.lastClickTime = now
+	a.lastClickPanel = panel
+	a.lastClickRow = contentRow
 
 	switch panel {
 	case WorktreesPanel:
 		old := a.list.cursor
 		if contentRow >= 0 && contentRow < len(a.list.items) {
 			a.list.cursor = contentRow
+		}
+		if doubleClick {
+			return a, a.handleOpen()
 		}
 		if a.list.cursor != old || prevFocused != WorktreesPanel {
 			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
@@ -984,6 +1051,9 @@ func (a *App) mouseClick(panel Panel, y int) (tea.Model, tea.Cmd) {
 		old := a.branchList.cursor
 		if contentRow >= 0 && contentRow < len(a.branchList.branches) {
 			a.branchList.cursor = contentRow
+		}
+		if doubleClick {
+			return a.handleBranchOpen()
 		}
 		if a.branchList.cursor != old || prevFocused != BranchesPanel {
 			return a, a.loadCommitForSelectedBranch()

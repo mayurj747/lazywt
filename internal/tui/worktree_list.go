@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mbency/lazyworktree/internal/config"
 	"github.com/mbency/lazyworktree/internal/model"
 )
 
@@ -14,11 +13,10 @@ type WorktreeList struct {
 	cursor int
 	width  int
 	height int
-	cfg    *config.Config
 }
 
-func NewWorktreeList(cfg *config.Config) WorktreeList {
-	return WorktreeList{cfg: cfg}
+func NewWorktreeList() WorktreeList {
+	return WorktreeList{}
 }
 
 func (w *WorktreeList) SetItems(items []model.Worktree) {
@@ -69,13 +67,12 @@ func (w *WorktreeList) FindByBranch(branch string) *model.Worktree {
 	return nil
 }
 
-func (w *WorktreeList) View() string {
+func (w *WorktreeList) View(focused bool) string {
 	if len(w.items) == 0 {
 		return dimStyle.Render("  No worktrees found. Press 'n' to create one.")
 	}
 
 	var rows []string
-	showPath := w.cfg.ShowPath()
 
 	for i, wt := range w.items {
 		marker := blankMarker.String()
@@ -83,21 +80,15 @@ func (w *WorktreeList) View() string {
 			marker = currentMarker.String()
 		}
 
-		row := fmt.Sprintf("%s %-20s", marker, wt.Branch)
-
-		if showPath {
-			row += fmt.Sprintf("  %-30s", wt.Name)
-		}
-
-		if wt.LastCommitHash != "" {
-			row += fmt.Sprintf("  %s %s", dimStyle.Render(wt.LastCommitHash), wt.LastCommitSubject)
-		}
+		// Compact format for narrow column: marker + branch + dirty indicator.
+		// Commit details are shown in the HEAD Commit pane.
+		row := fmt.Sprintf("%s %s", marker, wt.Branch)
 
 		if wt.IsDirty {
-			row += "  " + dirtyStyle.Render("[dirty]")
+			row += " " + dirtyStyle.Render("*")
 		}
 
-		if i == w.cursor {
+		if i == w.cursor && focused {
 			row = highlightStyle.Width(w.width).Render(row)
 		}
 

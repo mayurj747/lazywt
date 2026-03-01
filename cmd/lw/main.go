@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbency/lazyworktree/internal/config"
+	"github.com/mbency/lazyworktree/internal/git"
 	projectinit "github.com/mbency/lazyworktree/internal/init"
 	"github.com/mbency/lazyworktree/internal/tui"
 )
@@ -65,7 +66,8 @@ func runTUI() {
 		os.Exit(1)
 	}
 
-	app := tui.NewApp(cfg, cwd)
+	repoPath := git.ResolveRepoPath(cwd)
+	app := tui.NewApp(cfg, repoPath, cwd)
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

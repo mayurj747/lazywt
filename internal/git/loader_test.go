@@ -23,14 +23,16 @@ branch refs/heads/main
 			wantBranch: "main",
 		},
 		{
-			name: "single worktree main with bare",
-			input: `worktree /home/user/project
+			name: "bare entry is filtered out",
+			input: `worktree /home/user/project.git
+bare
+
+worktree /home/user/project/worktrees/main
 HEAD abc123def456
 branch refs/heads/main
-bare
 `,
 			wantLen:    1,
-			wantPath:   "/home/user/project",
+			wantPath:   "/home/user/project/worktrees/main",
 			wantBranch: "main",
 		},
 		{
@@ -97,6 +99,7 @@ func TestParseStanza(t *testing.T) {
 		wantPath   string
 		wantBranch string
 		wantHash   string
+		wantBare   bool
 	}{
 		{
 			name: "basic worktree",
@@ -115,22 +118,21 @@ branch refs/heads/main`,
 			wantHash:   "def456",
 		},
 		{
-			name: "bare main",
-			stanza: `worktree /home/user/project
-HEAD ghi789
-branch refs/heads/main
-bare`,
-			wantPath:   "/home/user/project",
-			wantBranch: "main",
-			wantHash:   "ghi789",
+			name:     "bare entry detected",
+			stanza:   "worktree /home/user/project.git\nbare",
+			wantPath: "/home/user/project.git",
+			wantBare: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wt, err := parseStanza(tt.stanza)
+			wt, isBare, err := parseStanza(tt.stanza)
 			if err != nil {
 				t.Fatalf("parseStanza error: %v", err)
+			}
+			if isBare != tt.wantBare {
+				t.Errorf("isBare = %v, want %v", isBare, tt.wantBare)
 			}
 			if wt.Path != tt.wantPath {
 				t.Errorf("Path = %q, want %q", wt.Path, tt.wantPath)

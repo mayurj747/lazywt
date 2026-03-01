@@ -48,12 +48,16 @@ const (
 )
 
 // GlobalConfigDir returns the path to the global config directory.
+// Uses $XDG_CONFIG_HOME if set, otherwise falls back to ~/.config.
 func GlobalConfigDir() (string, error) {
-	home, err := os.UserConfigDir()
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "lazywt"), nil
+	}
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "lazywt"), nil
+	return filepath.Join(home, ".config", "lazywt"), nil
 }
 
 // GlobalConfigPath returns the path to the global config file.

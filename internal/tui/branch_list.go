@@ -71,7 +71,7 @@ func (b *BranchList) HasWorktree(branch string) bool {
 	return b.wtBranches[branch]
 }
 
-func (b *BranchList) View() string {
+func (b *BranchList) View(focused bool) string {
 	if len(b.branches) == 0 {
 		return dimStyle.Render("  No branches found")
 	}
@@ -80,20 +80,19 @@ func (b *BranchList) View() string {
 	for i, branch := range b.branches {
 		hasWT := b.wtBranches[branch]
 
-		marker := "  "
-		if hasWT {
-			marker = currentMarker.String() + " "
-		}
-
-		wtTag := ""
-		if hasWT {
-			wtTag = " " + dimStyle.Render("[wt]")
-		}
-
-		row := fmt.Sprintf("%s%s%s", marker, branch, wtTag)
-
-		if i == b.cursor {
-			row = highlightStyle.Width(b.width).Render(row)
+		var row string
+		if i == b.cursor && focused {
+			label := "  " + branch
+			if hasWT {
+				label += " [wt]"
+			}
+			row = highlightStyle.Width(b.width).Render(label)
+		} else {
+			if hasWT {
+				row = fmt.Sprintf("  %s %s", branch, dimStyle.Render("[wt]"))
+			} else {
+				row = fmt.Sprintf("  %s", branch)
+			}
 		}
 
 		rows = append(rows, row)

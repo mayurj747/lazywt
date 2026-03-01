@@ -54,9 +54,13 @@ func parsePorcelain(output string) ([]model.Worktree, error) {
 		if stanza == "" {
 			continue
 		}
-		wt, err := parseStanza(stanza)
+		wt, isBare, err := parseStanza(stanza)
 		if err != nil {
 			return nil, err
+		}
+		// Skip the bare repo entry — it's not a real worktree.
+		if isBare {
+			continue
 		}
 		worktrees = append(worktrees, wt)
 	}
@@ -64,8 +68,9 @@ func parsePorcelain(output string) ([]model.Worktree, error) {
 	return worktrees, nil
 }
 
-func parseStanza(stanza string) (model.Worktree, error) {
+func parseStanza(stanza string) (model.Worktree, bool, error) {
 	wt := model.Worktree{}
+	isBare := false
 	lines := strings.Split(stanza, "\n")
 
 	for _, line := range lines {
@@ -87,6 +92,8 @@ func parseStanza(stanza string) (model.Worktree, error) {
 			wt.LastCommitHash = value
 		case "branch":
 			wt.Branch = strings.TrimPrefix(value, "refs/heads/")
+		case "bare":
+			isBare = true
 		}
 	}
 
@@ -94,7 +101,7 @@ func parseStanza(stanza string) (model.Worktree, error) {
 		wt.IsPathMissing = true
 	}
 
-	return wt, nil
+	return wt, isBare, nil
 }
 
 func deriveName(path, repoPath string) string {
