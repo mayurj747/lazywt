@@ -22,11 +22,24 @@ Launch the TUI. Run from an lw project root (a directory containing a bare repo,
 
 ### `lw init <url>`
 
-Clone a repo as a bare repository and scaffold a `lazywt.toml` config file. Can be run interactively (prompts for URL and project name) or non-interactively:
+Clone a repo as a bare repository and scaffold a project. Can be run interactively (prompts for URL and project name) or non-interactively:
 
 ```bash
 lw init https://github.com/user/repo.git
 ```
+
+This creates the following structure:
+
+```
+myproject/
+├── myproject.git/       # bare repo
+├── worktrees/
+│   └── main/            # default branch checked out
+├── scripts/             # place for hook scripts
+└── lazywt.toml          # project config
+```
+
+Run `lw` from the project root to manage worktrees. New worktrees are created under `worktrees/` (configurable via `default_path`).
 
 ## Keybindings
 
