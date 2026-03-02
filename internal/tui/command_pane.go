@@ -75,23 +75,10 @@ func (c *CommandPane) refreshContent() {
 	c.viewport.SetContent(strings.Join(lines, "\n"))
 }
 
-const banner = ` ██╗       █████╗  ███████╗ ██╗    ██╗  ██████╗  ██████╗  ██╗  ██╗ ████████╗
- ██║      ██╔══██╗ ╚══███╔╝ ██║    ██║ ██╔═══██╗ ██╔══██╗ ██║ ██╔╝ ╚══██╔══╝
- ██║      ███████║   ███╔╝  ██║ █╗ ██║ ██║   ██║ ██████╔╝ █████╔╝     ██║
- ██║      ██╔══██║  ███╔╝   ██║███╗██║ ██║   ██║ ██╔══██╗ ██╔═██╗     ██║
- ███████╗ ██║  ██║ ███████╗ ╚███╔███╔╝ ╚██████╔╝ ██║  ██║ ██║  ██╗    ██║
- ╚══════╝ ╚═╝  ╚═╝ ╚══════╝  ╚══╝╚══╝   ╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝    ╚═╝
- ██████╗  ███████╗ ███████╗
- ██╔══██╗ ██╔════╝ ██╔════╝
- ██████╔╝ █████╗   █████╗
- ██╔══██╗ ██╔══╝   ██╔══╝
- ██║  ██║ ███████╗ ███████╗
- ╚═╝  ╚═╝ ╚══════╝ ╚══════╝`
-
 func (c *CommandPane) View() string {
 	if len(c.lines) == 0 {
-		art := dimStyle.Render(banner)
-		padded := lipgloss.NewStyle().Width(c.width).Height(c.height).Render(art)
+		empty := dimStyle.Render("  Hook output will appear here...")
+		padded := lipgloss.NewStyle().Width(c.width).Height(c.height).Render(empty)
 		return padded
 	}
 	return c.viewport.View()
