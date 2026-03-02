@@ -18,9 +18,7 @@ var (
 	inactiveHighlightStyle = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("250"))
 	dirtyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	stderrStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	currentMarker  = lipgloss.NewStyle().Foreground(lipgloss.Color("62")).SetString("●")
-	blankMarker    = lipgloss.NewStyle().SetString(" ")
+	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 )
 
 // renderTitledPanel renders content inside a rounded border with the title

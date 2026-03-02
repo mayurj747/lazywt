@@ -13,15 +13,6 @@ import (
 )
 
 func ListWorktrees(repoPath string) ([]model.Worktree, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	absCwd, err := filepath.Abs(cwd)
-	if err != nil {
-		return nil, err
-	}
-
 	cmd := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -38,7 +29,6 @@ func ListWorktrees(repoPath string) ([]model.Worktree, error) {
 		if i == 0 {
 			worktrees[i].IsMain = true
 		}
-		worktrees[i].IsCurrent = worktrees[i].Path == absCwd
 		worktrees[i].Name = deriveName(worktrees[i].Path, repoPath)
 	}
 

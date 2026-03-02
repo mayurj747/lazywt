@@ -9,9 +9,8 @@ type Worktree struct {
 	Branch        string // Branch checked out (empty for detached HEAD)
 	Name          string // Display name, derived from path (uniquified leaf)
 	GitDir        string // Path to the .git directory for this worktree
-	IsMain        bool   // True if this is the main worktree (first in porcelain output)
-	IsCurrent     bool   // True if this worktree matches the current working directory
-	IsPathMissing bool   // True if the worktree path no longer exists on disk
+	IsMain        bool // True if this is the main worktree (first in porcelain output)
+	IsPathMissing bool // True if the worktree path no longer exists on disk
 
 	// Enrichment fields (from git log, git status)
 	LastCommitHash    string // Short commit hash (e.g. "a1b2c3f")

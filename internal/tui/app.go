@@ -1110,7 +1110,6 @@ func (a *App) detailsOverlay() string {
 		"Branch:        " + worktree.Branch,
 		"Path:          " + worktree.Path,
 		"Main worktree: " + boolToStr(worktree.IsMain),
-		"Current:       " + boolToStr(worktree.IsCurrent),
 		"Dirty:         " + boolToStr(worktree.IsDirty),
 		"",
 		"Last Commit:",

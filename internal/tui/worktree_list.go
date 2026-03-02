@@ -32,12 +32,7 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		return
 	}
 
-	marker := blankMarker.String()
-	if wt.Worktree.IsCurrent {
-		marker = currentMarker.String()
-	}
-
-	row := fmt.Sprintf("%s %s", marker, wt.Worktree.Branch)
+	row := " " + wt.Worktree.Branch
 	if wt.Worktree.IsDirty {
 		row += " " + dirtyStyle.Render("*")
 	}
