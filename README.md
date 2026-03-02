@@ -18,7 +18,7 @@ go build -o lw ./cmd/lw
 
 ### `lw`
 
-Launch the TUI. Run from inside any git repository (bare or non-bare).
+Launch the TUI. Run from an lw project root (a directory containing a bare repo, as created by `lw init`). Also works from inside a bare repo, a worktree, or a regular git repository.
 
 ### `lw init <url>`
 
