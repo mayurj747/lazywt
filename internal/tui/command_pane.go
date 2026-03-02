@@ -75,10 +75,15 @@ func (c *CommandPane) refreshContent() {
 	c.viewport.SetContent(strings.Join(lines, "\n"))
 }
 
+const banner = `  ▐▌              ▄▄▄▄     ▗▄▖ ▗▄▄▖▗▖ ▗▖▗▄▄▄▗▄▄▄▖▗▄▄▖ ▗▄▄▄▖▗▄▄▄▖
+  ▐▌   ▄▄▄ ▗▄▄▄▄▐▌ ▐▌    ▐▌ ▐▌▐▌ ▐▌▐▌▗▞▘ █▗▞▘▐▌ ▐▌▐▌   ▐▌
+  ▐▌  ▐▛▀▜▌  ▗▄▞▘ ▐▛▀▜▌  ▐▌ ▐▌▐▛▀▚▖▐▛▚▖  █▐▌  ▐▛▀▚▖▐▛▀▀▘▐▛▀▀▘
+  ▐▙▄▄▐▌ ▐▌▗▄▛▀   ▝▚▄▞▘  ▝▚▄▞▘▐▌ ▐▌▐▌ ▐▌ █ ▝▚▖▐▌ ▐▌▐▙▄▄▖▐▙▄▄▖`
+
 func (c *CommandPane) View() string {
 	if len(c.lines) == 0 {
-		empty := dimStyle.Render("  Hook output will appear here...")
-		padded := lipgloss.NewStyle().Width(c.width).Height(c.height).Render(empty)
+		art := dimStyle.Render(banner)
+		padded := lipgloss.NewStyle().Width(c.width).Height(c.height).Render(art)
 		return padded
 	}
 	return c.viewport.View()
