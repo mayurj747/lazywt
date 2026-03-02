@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -44,20 +45,12 @@ shell = "bash -c"
 		t.Fatalf("LoadFromPaths: %v", err)
 	}
 
-	// Hooks
-	if cfg.Hooks.PreCreate != "echo creating" {
-		t.Errorf("PreCreate = %q, want %q", cfg.Hooks.PreCreate, "echo creating")
-	}
-	if cfg.Hooks.PostCreate != "echo created" {
-		t.Errorf("PostCreate = %q, want %q", cfg.Hooks.PostCreate, "echo created")
-	}
-	if cfg.Hooks.OnOpen != "./scripts/open.sh" {
-		t.Errorf("OnOpen = %q, want %q", cfg.Hooks.OnOpen, "./scripts/open.sh")
-	}
-	// Unset hooks should be empty
-	if cfg.Hooks.PreDelete != "" {
-		t.Errorf("PreDelete = %q, want empty", cfg.Hooks.PreDelete)
-	}
+	// Hooks — now []string
+	assertSlice(t, "PreCreate", cfg.Hooks.PreCreate, []string{"echo creating"})
+	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, []string{"echo created"})
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"./scripts/open.sh"})
+	// Unset hooks should be nil
+	assertSlice(t, "PreDelete", cfg.Hooks.PreDelete, nil)
 
 	// Display
 	if cfg.ShowPath() != false {
@@ -94,7 +87,6 @@ func TestDefaults_EmptyConfig(t *testing.T) {
 }
 
 func TestLoadFromPaths_MissingFiles(t *testing.T) {
-	// Both files missing — should return empty config with defaults, no error.
 	cfg, err := LoadFromPaths("/nonexistent/global.toml", "/nonexistent/project.toml")
 	if err != nil {
 		t.Fatalf("expected no error for missing files, got: %v", err)
@@ -105,7 +97,6 @@ func TestLoadFromPaths_MissingFiles(t *testing.T) {
 }
 
 func TestLoadFromPaths_EmptyPaths(t *testing.T) {
-	// Empty string paths — should skip both, return defaults.
 	cfg, err := LoadFromPaths("", "")
 	if err != nil {
 		t.Fatalf("expected no error for empty paths, got: %v", err)
@@ -139,9 +130,7 @@ shell = "zsh -c"
 	if err != nil {
 		t.Fatalf("LoadFromPaths: %v", err)
 	}
-	if cfg.Hooks.OnOpen != "global-open" {
-		t.Errorf("OnOpen = %q, want %q", cfg.Hooks.OnOpen, "global-open")
-	}
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"global-open"})
 	if cfg.ShellCmd() != "zsh -c" {
 		t.Errorf("ShellCmd() = %q, want %q", cfg.ShellCmd(), "zsh -c")
 	}
@@ -161,24 +150,21 @@ show_path = false
 	if err != nil {
 		t.Fatalf("LoadFromPaths: %v", err)
 	}
-	if cfg.Hooks.OnOpen != "project-open" {
-		t.Errorf("OnOpen = %q, want %q", cfg.Hooks.OnOpen, "project-open")
-	}
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"project-open"})
 	if cfg.ShowPath() != false {
 		t.Errorf("ShowPath() = %v, want false", cfg.ShowPath())
 	}
-	// Unset fields should still return defaults
 	if cfg.ShellCmd() != DefaultShell {
 		t.Errorf("ShellCmd() = %q, want default %q", cfg.ShellCmd(), DefaultShell)
 	}
 }
 
-func TestLoadFromPaths_MergeBehavior(t *testing.T) {
+func TestLoadFromPaths_ChainDefault(t *testing.T) {
 	dir := t.TempDir()
 
 	globalPath := writeTOML(t, dir, "global.toml", `
 [hooks]
-pre_create = "global-pre-create"
+post_create = "global-post-create"
 on_open = "global-open"
 on_switch = "global-switch"
 
@@ -193,6 +179,7 @@ shell = "bash -c"
 
 	projPath := writeTOML(t, dir, "project.toml", `
 [hooks]
+post_create = "project-post-create"
 on_open = "project-open"
 
 [display]
@@ -207,132 +194,162 @@ default_path = "worktrees"
 		t.Fatalf("LoadFromPaths: %v", err)
 	}
 
-	tests := []struct {
-		name string
-		got  string
-		want string
-	}{
-		// Project overrides global
-		{"OnOpen (project overrides)", cfg.Hooks.OnOpen, "project-open"},
-		{"DefaultPathDir (project overrides)", cfg.DefaultPathDir(), "worktrees"},
-		// Global value preserved when project doesn't set it
-		{"PreCreate (global preserved)", cfg.Hooks.PreCreate, "global-pre-create"},
-		{"OnSwitch (global preserved)", cfg.Hooks.OnSwitch, "global-switch"},
-		{"ShellCmd (global preserved)", cfg.ShellCmd(), "bash -c"},
-		// Global path_style preserved (project didn't set it)
-		{"PathStyle (global preserved)", cfg.PathStyle(), "relative"},
-	}
+	// Chain: both global and project run
+	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, []string{"global-post-create", "project-post-create"})
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"global-open", "project-open"})
+	// Global only (project didn't set)
+	assertSlice(t, "OnSwitch", cfg.Hooks.OnSwitch, []string{"global-switch"})
 
-	for _, tt := range tests {
-		if tt.got != tt.want {
-			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
-		}
-	}
-
-	// Bool field: project overrides global
+	// Display/General merge unchanged
 	if cfg.ShowPath() != false {
 		t.Errorf("ShowPath() = %v, want false (project override)", cfg.ShowPath())
 	}
-}
-
-func TestMerge_AllHooks(t *testing.T) {
-	dst := &Config{
-		Hooks: HooksConfig{
-			PreCreate:  "dst-pre-create",
-			PostCreate: "dst-post-create",
-			PreDelete:  "dst-pre-delete",
-			PostDelete: "dst-post-delete",
-			OnSwitch:   "dst-on-switch",
-			OnOpen:     "dst-on-open",
-			PrePrune:   "dst-pre-prune",
-			PostPrune:  "dst-post-prune",
-		},
+	if cfg.DefaultPathDir() != "worktrees" {
+		t.Errorf("DefaultPathDir() = %q, want %q", cfg.DefaultPathDir(), "worktrees")
 	}
-
-	src := &Config{
-		Hooks: HooksConfig{
-			PreCreate: "src-pre-create",
-			OnOpen:    "src-on-open",
-			// All others empty — should NOT override dst
-		},
+	if cfg.ShellCmd() != "bash -c" {
+		t.Errorf("ShellCmd() = %q, want %q", cfg.ShellCmd(), "bash -c")
 	}
-
-	merge(dst, src)
-
-	tests := []struct {
-		name string
-		got  string
-		want string
-	}{
-		{"PreCreate (overridden)", dst.Hooks.PreCreate, "src-pre-create"},
-		{"OnOpen (overridden)", dst.Hooks.OnOpen, "src-on-open"},
-		{"PostCreate (preserved)", dst.Hooks.PostCreate, "dst-post-create"},
-		{"PreDelete (preserved)", dst.Hooks.PreDelete, "dst-pre-delete"},
-		{"PostDelete (preserved)", dst.Hooks.PostDelete, "dst-post-delete"},
-		{"OnSwitch (preserved)", dst.Hooks.OnSwitch, "dst-on-switch"},
-		{"PrePrune (preserved)", dst.Hooks.PrePrune, "dst-pre-prune"},
-		{"PostPrune (preserved)", dst.Hooks.PostPrune, "dst-post-prune"},
-	}
-
-	for _, tt := range tests {
-		if tt.got != tt.want {
-			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
-		}
+	if cfg.PathStyle() != "relative" {
+		t.Errorf("PathStyle() = %q, want %q", cfg.PathStyle(), "relative")
 	}
 }
 
-func TestMerge_DisplayPointers(t *testing.T) {
-	dst := &Config{
-		Display: DisplayConfig{
-			ShowPath:  boolPtr(true),
-			PathStyle: strPtr("relative"),
-		},
+func TestLoadFromPaths_OverrideMode(t *testing.T) {
+	dir := t.TempDir()
+
+	globalPath := writeTOML(t, dir, "global.toml", `
+[hooks]
+post_create = "global-post-create"
+on_open = "global-open"
+`)
+
+	projPath := writeTOML(t, dir, "project.toml", `
+[hooks]
+post_create = "project-post-create"
+
+[hooks.mode]
+post_create = "override"
+`)
+
+	cfg, err := LoadFromPaths(globalPath, projPath)
+	if err != nil {
+		t.Fatalf("LoadFromPaths: %v", err)
 	}
 
-	// src overrides ShowPath to false, leaves PathStyle nil (should not override)
-	src := &Config{
-		Display: DisplayConfig{
-			ShowPath: boolPtr(false),
-		},
-	}
-
-	merge(dst, src)
-
-	if *dst.Display.ShowPath != false {
-		t.Errorf("ShowPath = %v, want false", *dst.Display.ShowPath)
-	}
-	if *dst.Display.PathStyle != "relative" {
-		t.Errorf("PathStyle = %q, want %q", *dst.Display.PathStyle, "relative")
-	}
+	// Override: only project runs
+	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, []string{"project-post-create"})
+	// on_open not overridden — chains (but project didn't set it, so global only)
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"global-open"})
 }
 
-func TestMerge_GeneralPointers(t *testing.T) {
-	dst := &Config{
-		General: GeneralConfig{
-			DefaultPath: strPtr("global-wt"),
-			Shell:       strPtr("bash -c"),
-		},
+func TestLoadFromPaths_DisableMode(t *testing.T) {
+	dir := t.TempDir()
+
+	globalPath := writeTOML(t, dir, "global.toml", `
+[hooks]
+post_create = "global-post-create"
+on_open = "global-open"
+`)
+
+	projPath := writeTOML(t, dir, "project.toml", `
+[hooks.mode]
+post_create = "disable"
+`)
+
+	cfg, err := LoadFromPaths(globalPath, projPath)
+	if err != nil {
+		t.Fatalf("LoadFromPaths: %v", err)
 	}
 
-	// src overrides Shell, leaves DefaultPath nil
-	src := &Config{
-		General: GeneralConfig{
-			Shell: strPtr("zsh -c"),
-		},
+	// Disable: neither runs
+	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, nil)
+	// on_open not disabled — global preserved
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"global-open"})
+}
+
+func TestLoadFromPaths_MixedModes(t *testing.T) {
+	dir := t.TempDir()
+
+	globalPath := writeTOML(t, dir, "global.toml", `
+[hooks]
+post_create = "global-post-create"
+on_open = "global-open"
+on_switch = "global-switch"
+pre_delete = "global-pre-delete"
+`)
+
+	projPath := writeTOML(t, dir, "project.toml", `
+[hooks]
+post_create = "project-post-create"
+on_open = "project-open"
+on_switch = "project-switch"
+
+[hooks.mode]
+post_create = "chain"
+on_open = "override"
+on_switch = "disable"
+`)
+
+	cfg, err := LoadFromPaths(globalPath, projPath)
+	if err != nil {
+		t.Fatalf("LoadFromPaths: %v", err)
 	}
 
-	merge(dst, src)
+	assertSlice(t, "PostCreate (chain)", cfg.Hooks.PostCreate, []string{"global-post-create", "project-post-create"})
+	assertSlice(t, "OnOpen (override)", cfg.Hooks.OnOpen, []string{"project-open"})
+	assertSlice(t, "OnSwitch (disable)", cfg.Hooks.OnSwitch, nil)
+	assertSlice(t, "PreDelete (global preserved)", cfg.Hooks.PreDelete, []string{"global-pre-delete"})
+}
 
-	if *dst.General.DefaultPath != "global-wt" {
-		t.Errorf("DefaultPath = %q, want %q", *dst.General.DefaultPath, "global-wt")
+func TestLoadFromPaths_InvalidModeFallsBackToChain(t *testing.T) {
+	dir := t.TempDir()
+
+	globalPath := writeTOML(t, dir, "global.toml", `
+[hooks]
+post_create = "global-post-create"
+`)
+
+	projPath := writeTOML(t, dir, "project.toml", `
+[hooks]
+post_create = "project-post-create"
+
+[hooks.mode]
+post_create = "bogus"
+`)
+
+	cfg, err := LoadFromPaths(globalPath, projPath)
+	if err != nil {
+		t.Fatalf("LoadFromPaths: %v", err)
 	}
-	if *dst.General.Shell != "zsh -c" {
-		t.Errorf("Shell = %q, want %q", *dst.General.Shell, "zsh -c")
+
+	// Invalid mode falls back to chain
+	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, []string{"global-post-create", "project-post-create"})
+}
+
+func TestLoadFromPaths_OverrideWithEmptyProjectHook(t *testing.T) {
+	dir := t.TempDir()
+
+	globalPath := writeTOML(t, dir, "global.toml", `
+[hooks]
+post_create = "global-post-create"
+`)
+
+	projPath := writeTOML(t, dir, "project.toml", `
+[hooks.mode]
+post_create = "override"
+`)
+
+	cfg, err := LoadFromPaths(globalPath, projPath)
+	if err != nil {
+		t.Fatalf("LoadFromPaths: %v", err)
 	}
+
+	// Override with no project hook = nothing runs
+	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, nil)
 }
 
 func TestLoadFromPaths_PartialConfig(t *testing.T) {
-	// Config with only some sections — others should use defaults.
 	dir := t.TempDir()
 	path := writeTOML(t, dir, "partial.toml", `
 [hooks]
@@ -344,10 +361,7 @@ on_open = "open.sh"
 		t.Fatalf("LoadFromPaths: %v", err)
 	}
 
-	if cfg.Hooks.OnOpen != "open.sh" {
-		t.Errorf("OnOpen = %q, want %q", cfg.Hooks.OnOpen, "open.sh")
-	}
-	// Display and General should be nil pointers → defaults
+	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"open.sh"})
 	if cfg.ShowPath() != DefaultShowPath {
 		t.Errorf("ShowPath() = %v, want default %v", cfg.ShowPath(), DefaultShowPath)
 	}
@@ -357,7 +371,6 @@ on_open = "open.sh"
 }
 
 func TestLoadFromPaths_EmptyTOMLFile(t *testing.T) {
-	// Completely empty file — should parse fine, all defaults.
 	dir := t.TempDir()
 	path := writeTOML(t, dir, "empty.toml", "")
 
@@ -367,5 +380,58 @@ func TestLoadFromPaths_EmptyTOMLFile(t *testing.T) {
 	}
 	if cfg.ShellCmd() != DefaultShell {
 		t.Errorf("ShellCmd() = %q, want default %q", cfg.ShellCmd(), DefaultShell)
+	}
+}
+
+func TestMergeHook(t *testing.T) {
+	tests := []struct {
+		name    string
+		global  string
+		project string
+		mode    HookMode
+		want    []string
+	}{
+		{"chain both", "g", "p", HookModeChain, []string{"g", "p"}},
+		{"chain global only", "g", "", HookModeChain, []string{"g"}},
+		{"chain project only", "", "p", HookModeChain, []string{"p"}},
+		{"chain neither", "", "", HookModeChain, nil},
+		{"override with project", "g", "p", HookModeOverride, []string{"p"}},
+		{"override no project", "g", "", HookModeOverride, nil},
+		{"disable", "g", "p", HookModeDisable, nil},
+		{"disable no hooks", "", "", HookModeDisable, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeHook(tt.global, tt.project, tt.mode)
+			assertSlice(t, tt.name, got, tt.want)
+		})
+	}
+}
+
+func TestParseHookMode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  HookMode
+	}{
+		{"chain", HookModeChain},
+		{"override", HookModeOverride},
+		{"disable", HookModeDisable},
+		{"", HookModeChain},
+		{"bogus", HookModeChain},
+	}
+
+	for _, tt := range tests {
+		got := parseHookMode(tt.input)
+		if got != tt.want {
+			t.Errorf("parseHookMode(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func assertSlice(t *testing.T, name string, got, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s = %v, want %v", name, got, want)
 	}
 }

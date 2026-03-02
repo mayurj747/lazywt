@@ -462,11 +462,11 @@ func (a *App) handleConfirmDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		if msg.Runes[0] == 'y' || msg.Runes[0] == 'Y' {
-			_, cmd := a.runDeleteAction()
-			return a, cmd
-		}
+	switch msg.String() {
+	case "y", "Y":
+		_, cmd := a.runDeleteAction()
+		return a, cmd
+	case "n", "N":
 		a.state = StateNormal
 		a.confirmPrompt = "y/n"
 	}
@@ -480,11 +480,11 @@ func (a *App) handleConfirmPruneKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		if msg.Runes[0] == 'y' || msg.Runes[0] == 'Y' {
-			_, cmd := a.runPruneAction()
-			return a, cmd
-		}
+	switch msg.String() {
+	case "y", "Y":
+		_, cmd := a.runPruneAction()
+		return a, cmd
+	case "n", "N":
 		a.state = StateNormal
 		a.confirmPrompt = "y/n"
 	}
@@ -690,20 +690,40 @@ func listenForHookOutput(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-func (a *App) runHookStreaming(hookCmd, hookName string, env map[string]string, refresh bool) tea.Cmd {
+func (a *App) runHookStreaming(hookCmds []string, hookName string, env map[string]string, refresh bool) tea.Cmd {
+	if len(hookCmds) == 0 {
+		return nil
+	}
 	ch := make(chan tea.Msg, 64)
 	hookExec := a.hookExec
 
 	go func() {
-		result := hookExec.RunStreaming(hookCmd, env, func(ol hooks.OutputLine) {
-			ol.Hook = hookName
-			ch <- outputLineMsg{line: ol, ch: ch}
-		})
-		ch <- hookDoneMsg{hookName: hookName, exitCode: result.ExitCode, refresh: refresh}
+		var lastExit int
+		for _, cmd := range hookCmds {
+			result := hookExec.RunStreaming(cmd, env, func(ol hooks.OutputLine) {
+				ol.Hook = hookName
+				ch <- outputLineMsg{line: ol, ch: ch}
+			})
+			lastExit = result.ExitCode
+		}
+		ch <- hookDoneMsg{hookName: hookName, exitCode: lastExit, refresh: refresh}
 		close(ch)
 	}()
 
 	return listenForHookOutput(ch)
+}
+
+// runPreHookChain runs pre-hooks synchronously, aborting on first failure.
+func (a *App) runPreHookChain(cmds []string, env map[string]string, hookName string) bool {
+	for _, cmd := range cmds {
+		result := a.hookExec.Run(cmd, env)
+		a.sendHookOutput(result, hookName)
+		if result.ExitCode != 0 {
+			a.sendOutput("stderr", hookName+" hook failed, aborting", hookName)
+			return false
+		}
+	}
+	return true
 }
 
 // --- Action Helpers ---
@@ -764,25 +784,25 @@ func (a *App) fireOnSwitch() tea.Cmd {
 		return nil
 	}
 
-	hook := a.cfg.Hooks.OnSwitch
-	if hook == "" {
+	hooks := a.cfg.Hooks.OnSwitch
+	if len(hooks) == 0 {
 		return nil
 	}
 
 	env := a.buildHookEnv(worktree, "switch")
-	return a.runHookStreaming(hook, "on_switch", env, false)
+	return a.runHookStreaming(hooks, "on_switch", env, false)
 }
 
 // openWorktree fires the on_open hook for the given worktree.
 func (a *App) openWorktree(wt *model.Worktree) tea.Cmd {
-	hook := a.cfg.Hooks.OnOpen
-	if hook == "" {
+	hooks := a.cfg.Hooks.OnOpen
+	if len(hooks) == 0 {
 		a.sendOutput("stdout", "No on_open hook configured", "info")
 		return nil
 	}
 
 	env := a.buildHookEnv(wt, "open")
-	return a.runHookStreaming(hook, "on_open", env, false)
+	return a.runHookStreaming(hooks, "on_open", env, false)
 }
 
 func (a *App) handleOpen() tea.Cmd {
@@ -841,13 +861,9 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 
 	a.state = StateNormal
 
-	preHook := a.cfg.Hooks.PreDelete
-	if preHook != "" {
+	if len(a.cfg.Hooks.PreDelete) > 0 {
 		env := a.buildHookEnv(worktree, "delete")
-		result := a.hookExec.Run(preHook, env)
-		a.sendHookOutput(result, "pre_delete")
-		if result.ExitCode != 0 {
-			a.sendOutput("stderr", "pre_delete hook failed, aborting", "pre_delete")
+		if !a.runPreHookChain(a.cfg.Hooks.PreDelete, env, "pre_delete") {
 			return a, nil
 		}
 	}
@@ -864,10 +880,9 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	postHook := a.cfg.Hooks.PostDelete
-	if postHook != "" {
+	if len(a.cfg.Hooks.PostDelete) > 0 {
 		env := a.buildHookEnv(worktree, "delete")
-		return a, a.runHookStreaming(postHook, "post_delete", env, true)
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(a.cfg.Hooks.PostDelete, "post_delete", env, true))
 	}
 
 	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
@@ -885,13 +900,9 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 		Name:   branch,
 	}
 
-	preHook := a.cfg.Hooks.PreCreate
-	if preHook != "" {
+	if len(a.cfg.Hooks.PreCreate) > 0 {
 		env := a.buildHookEnv(worktree, "create")
-		result := a.hookExec.Run(preHook, env)
-		a.sendHookOutput(result, "pre_create")
-		if result.ExitCode != 0 {
-			a.sendOutput("stderr", "pre_create hook failed, aborting", "pre_create")
+		if !a.runPreHookChain(a.cfg.Hooks.PreCreate, env, "pre_create") {
 			a.textInput.Reset()
 			return a, nil
 		}
@@ -914,10 +925,9 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 
 	a.textInput.Reset()
 
-	postHook := a.cfg.Hooks.PostCreate
-	if postHook != "" {
+	if len(a.cfg.Hooks.PostCreate) > 0 {
 		env := a.buildHookEnv(worktree, "create")
-		return a, a.runHookStreaming(postHook, "post_create", env, true)
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(a.cfg.Hooks.PostCreate, "post_create", env, true))
 	}
 
 	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
@@ -926,13 +936,9 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 func (a *App) runPruneAction() (tea.Model, tea.Cmd) {
 	a.state = StateNormal
 
-	preHook := a.cfg.Hooks.PrePrune
-	if preHook != "" {
+	if len(a.cfg.Hooks.PrePrune) > 0 {
 		env := a.buildHookEnv(nil, "prune")
-		result := a.hookExec.Run(preHook, env)
-		a.sendHookOutput(result, "pre_prune")
-		if result.ExitCode != 0 {
-			a.sendOutput("stderr", "pre_prune hook failed, aborting", "pre_prune")
+		if !a.runPreHookChain(a.cfg.Hooks.PrePrune, env, "pre_prune") {
 			return a, nil
 		}
 	}
@@ -944,10 +950,9 @@ func (a *App) runPruneAction() (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	postHook := a.cfg.Hooks.PostPrune
-	if postHook != "" {
+	if len(a.cfg.Hooks.PostPrune) > 0 {
 		env := a.buildHookEnv(nil, "prune")
-		return a, a.runHookStreaming(postHook, "post_prune", env, true)
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(a.cfg.Hooks.PostPrune, "post_prune", env, true))
 	}
 
 	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
