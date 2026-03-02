@@ -15,7 +15,7 @@ type WorktreeItem struct {
 	Worktree model.Worktree
 }
 
-func (w WorktreeItem) FilterValue() string { return w.Worktree.Branch }
+func (w WorktreeItem) FilterValue() string { return w.Worktree.Name }
 
 // worktreeDelegate renders worktree items in the list.
 type worktreeDelegate struct {
@@ -32,7 +32,7 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		return
 	}
 
-	row := " " + wt.Worktree.Branch
+	row := " " + wt.Worktree.Name
 	if wt.Worktree.IsDirty {
 		row += " " + dirtyStyle.Render("*")
 	}
