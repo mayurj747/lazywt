@@ -9,7 +9,21 @@ import (
 	"strings"
 )
 
-const defaultConfig = `[hooks]
+const defaultConfig = `# Hook environment variables:
+#   $LW_ACTION    — action being performed (create, delete, open, switch, prune)
+#   $LW_REPO_PATH — path to the bare repo / git dir
+#   $LW_PATH      — path to the worktree (empty for prune)
+#   $LW_BRANCH    — branch name (empty for prune)
+#   $LW_IS_DIRTY  — "1" if worktree has uncommitted changes, "0" otherwise
+#                    (only set for on_open and on_switch)
+#
+# Pre-hooks block the action on non-zero exit.
+# When a global config exists (~/.config/lazywt/config.toml), hooks chain
+# by default (global runs first, then project). Override per-hook with:
+#   [hooks.mode]
+#   post_create = "override"  # "chain" (default), "override", or "disable"
+
+[hooks]
 pre_create = ""
 post_create = ""
 pre_delete = ""
