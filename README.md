@@ -109,7 +109,6 @@ pre_create  = ""  # runs before creating a worktree (blocks on failure)
 post_create = ""  # runs after creating a worktree
 pre_delete  = ""  # runs before deleting a worktree (blocks on failure)
 post_delete = ""  # runs after deleting a worktree
-on_switch   = ""  # runs when cursor moves to a different worktree
 on_open     = ""  # runs when opening a worktree (o / Enter)
 pre_prune   = ""  # runs before pruning (blocks on failure)
 post_prune  = ""  # runs after pruning
@@ -125,12 +124,12 @@ All hooks receive:
 
 | Variable | Description |
 |----------|-------------|
-| `LW_ACTION` | The action being performed (`create`, `delete`, `open`, `switch`, `prune`) |
+| `LW_ACTION` | The action being performed (`create`, `delete`, `open`, `prune`) |
 | `LW_REPO_PATH` | Path to the bare repo / git dir |
 | `LW_PATH` | Path to the worktree (empty for prune) |
 | `LW_BRANCH` | Branch name (empty for prune) |
 
-`on_open` and `on_switch` also receive:
+`on_open` also receives:
 
 | Variable | Description |
 |----------|-------------|

@@ -23,8 +23,7 @@ type rawHooksModeConfig struct {
 	PostCreate string `toml:"post_create"`
 	PreDelete  string `toml:"pre_delete"`
 	PostDelete string `toml:"post_delete"`
-	OnSwitch   string `toml:"on_switch"`
-	OnOpen     string `toml:"on_open"`
+	OnOpen string `toml:"on_open"`
 	PrePrune   string `toml:"pre_prune"`
 	PostPrune  string `toml:"post_prune"`
 }
@@ -35,7 +34,6 @@ type rawHooksConfig struct {
 	PostCreate string             `toml:"post_create"`
 	PreDelete  string             `toml:"pre_delete"`
 	PostDelete string             `toml:"post_delete"`
-	OnSwitch   string             `toml:"on_switch"`
 	OnOpen     string             `toml:"on_open"`
 	PrePrune   string             `toml:"pre_prune"`
 	PostPrune  string             `toml:"post_prune"`
@@ -55,7 +53,6 @@ type HooksConfig struct {
 	PostCreate []string
 	PreDelete  []string
 	PostDelete []string
-	OnSwitch   []string
 	OnOpen     []string
 	PrePrune   []string
 	PostPrune  []string
@@ -214,7 +211,6 @@ func mergeAndResolve(global, project *rawConfig) *Config {
 		PostCreate: mergeHook(g.PostCreate, p.PostCreate, parseHookMode(p.Mode.PostCreate)),
 		PreDelete:  mergeHook(g.PreDelete, p.PreDelete, parseHookMode(p.Mode.PreDelete)),
 		PostDelete: mergeHook(g.PostDelete, p.PostDelete, parseHookMode(p.Mode.PostDelete)),
-		OnSwitch:   mergeHook(g.OnSwitch, p.OnSwitch, parseHookMode(p.Mode.OnSwitch)),
 		OnOpen:     mergeHook(g.OnOpen, p.OnOpen, parseHookMode(p.Mode.OnOpen)),
 		PrePrune:   mergeHook(g.PrePrune, p.PrePrune, parseHookMode(p.Mode.PrePrune)),
 		PostPrune:  mergeHook(g.PostPrune, p.PostPrune, parseHookMode(p.Mode.PostPrune)),

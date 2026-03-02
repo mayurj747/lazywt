@@ -15,7 +15,7 @@ const defaultConfig = `# Hook environment variables:
 #   $LW_PATH      — path to the worktree (empty for prune)
 #   $LW_BRANCH    — branch name (empty for prune)
 #   $LW_IS_DIRTY  — "1" if worktree has uncommitted changes, "0" otherwise
-#                    (only set for on_open and on_switch)
+#                    (only set for on_open)
 #
 # Pre-hooks block the action on non-zero exit.
 # When a global config exists (~/.config/lazywt/config.toml), hooks chain
@@ -28,7 +28,6 @@ pre_create = ""
 post_create = ""
 pre_delete = ""
 post_delete = ""
-on_switch = ""
 on_open = ""
 pre_prune = ""
 post_prune = ""

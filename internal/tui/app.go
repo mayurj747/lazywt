@@ -143,7 +143,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.lastCursor == -1 && len(msg.worktrees) > 0 {
 			a.lastCursor = 0
-			cmds = append(cmds, a.fireOnSwitch())
 		}
 		cmds = append(cmds, a.loadCommitForSelectedWorktree())
 		return a, tea.Batch(cmds...)
@@ -348,7 +347,7 @@ func (a *App) forwardToWorktreeList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmd := a.list.Update(msg)
 	newIdx := a.list.Index()
 	if newIdx != oldIdx {
-		return a, tea.Batch(cmd, a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
+		return a, tea.Batch(cmd, a.loadCommitForSelectedWorktree())
 	}
 	return a, cmd
 }
@@ -743,7 +742,7 @@ func (a *App) buildHookEnv(worktree *model.Worktree, action string) map[string]s
 		"LW_BRANCH":    branch,
 	}
 
-	if action == "open" || action == "switch" {
+	if action == "open" {
 		if worktree != nil {
 			if worktree.IsDirty {
 				env["LW_IS_DIRTY"] = "1"
@@ -776,21 +775,6 @@ func (a *App) sendHookOutput(result hooks.HookResult, hookName string) {
 			a.sendOutput("stderr", line, hookName)
 		}
 	}
-}
-
-func (a *App) fireOnSwitch() tea.Cmd {
-	worktree := a.list.Selected()
-	if worktree == nil {
-		return nil
-	}
-
-	hooks := a.cfg.Hooks.OnSwitch
-	if len(hooks) == 0 {
-		return nil
-	}
-
-	env := a.buildHookEnv(worktree, "switch")
-	return a.runHookStreaming(hooks, "on_switch", env, false)
 }
 
 // openWorktree fires the on_open hook for the given worktree.
@@ -1014,7 +998,7 @@ func (a *App) mouseScroll(panel Panel, dir int) (tea.Model, tea.Cmd) {
 			a.list.list.CursorDown()
 		}
 		if a.list.Index() != oldIdx {
-			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
+			return a, a.loadCommitForSelectedWorktree()
 		}
 	case BranchesPanel:
 		oldIdx := a.branchList.Index()
@@ -1071,7 +1055,7 @@ func (a *App) mouseClick(panel Panel, y int) (tea.Model, tea.Cmd) {
 			return a, a.handleOpen()
 		}
 		if a.list.Index() != oldIdx || prevFocused != WorktreesPanel {
-			return a, tea.Batch(a.fireOnSwitch(), a.loadCommitForSelectedWorktree())
+			return a, a.loadCommitForSelectedWorktree()
 		}
 	case BranchesPanel:
 		oldIdx := a.branchList.Index()

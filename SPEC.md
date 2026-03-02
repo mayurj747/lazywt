@@ -99,7 +99,6 @@ pre_create = ""
 post_create = ""
 pre_delete = ""
 post_delete = ""
-on_switch = ""
 on_open = ""
 pre_prune = ""
 post_prune = ""
@@ -125,7 +124,6 @@ lazyworktree has **no built-in editor or shell integration**. The "Open" action 
 | `post_create` | After successful worktree creation | No |
 | `pre_delete` | Before `git worktree remove` | Yes |
 | `post_delete` | After successful worktree removal | No |
-| `on_switch` | When user moves cursor to a different worktree in the list | No |
 | `on_open` | When user presses `enter`/`o` on a worktree | No |
 | `pre_prune` | Before `git worktree prune` | Yes |
 | `post_prune` | After successful prune | No |
@@ -144,10 +142,10 @@ Every hook receives context via environment variables:
 |----------|-------------|--------------|
 | `LW_PATH` | Absolute path to the worktree | All hooks |
 | `LW_BRANCH` | Branch name | All hooks |
-| `LW_ACTION` | The action name (create, delete, open, prune, switch) | All hooks |
+| `LW_ACTION` | The action name (create, delete, open, prune) | All hooks |
 | `LW_PROJECT` | Absolute path to the project root | All hooks |
 | `LW_BARE_REPO` | Absolute path to the bare repo | All hooks |
-| `LW_IS_DIRTY` | "true" or "false" | on_open, on_switch |
+| `LW_IS_DIRTY` | "true" or "false" | on_open |
 
 ## Bare Repo Support
 First-class. lazyworktree detects whether the repo is bare and adjusts path resolution accordingly. The `lw init` command creates bare repos by default — this is the intended workflow.

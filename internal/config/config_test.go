@@ -166,7 +166,6 @@ func TestLoadFromPaths_ChainDefault(t *testing.T) {
 [hooks]
 post_create = "global-post-create"
 on_open = "global-open"
-on_switch = "global-switch"
 
 [display]
 show_path = true
@@ -197,8 +196,6 @@ default_path = "worktrees"
 	// Chain: both global and project run
 	assertSlice(t, "PostCreate", cfg.Hooks.PostCreate, []string{"global-post-create", "project-post-create"})
 	assertSlice(t, "OnOpen", cfg.Hooks.OnOpen, []string{"global-open", "project-open"})
-	// Global only (project didn't set)
-	assertSlice(t, "OnSwitch", cfg.Hooks.OnSwitch, []string{"global-switch"})
 
 	// Display/General merge unchanged
 	if cfg.ShowPath() != false {
@@ -275,7 +272,6 @@ func TestLoadFromPaths_MixedModes(t *testing.T) {
 [hooks]
 post_create = "global-post-create"
 on_open = "global-open"
-on_switch = "global-switch"
 pre_delete = "global-pre-delete"
 `)
 
@@ -283,12 +279,11 @@ pre_delete = "global-pre-delete"
 [hooks]
 post_create = "project-post-create"
 on_open = "project-open"
-on_switch = "project-switch"
 
 [hooks.mode]
 post_create = "chain"
 on_open = "override"
-on_switch = "disable"
+pre_delete = "disable"
 `)
 
 	cfg, err := LoadFromPaths(globalPath, projPath)
@@ -298,8 +293,7 @@ on_switch = "disable"
 
 	assertSlice(t, "PostCreate (chain)", cfg.Hooks.PostCreate, []string{"global-post-create", "project-post-create"})
 	assertSlice(t, "OnOpen (override)", cfg.Hooks.OnOpen, []string{"project-open"})
-	assertSlice(t, "OnSwitch (disable)", cfg.Hooks.OnSwitch, nil)
-	assertSlice(t, "PreDelete (global preserved)", cfg.Hooks.PreDelete, []string{"global-pre-delete"})
+	assertSlice(t, "PreDelete (disable)", cfg.Hooks.PreDelete, nil)
 }
 
 func TestLoadFromPaths_InvalidModeFallsBackToChain(t *testing.T) {
