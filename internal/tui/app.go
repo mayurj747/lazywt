@@ -285,7 +285,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) View() string {
-	// Overlays render full-screen
+	bg := a.normalView()
+
 	if a.state == StateHelp {
 		return a.helpOverlay()
 	}
@@ -293,13 +294,16 @@ func (a App) View() string {
 		return a.detailsOverlay()
 	}
 	if a.state == StateCreating {
-		return a.creatingView()
+		return a.creatingModal(bg)
 	}
 	if a.state == StateConfirmingDelete || a.state == StateConfirmingPrune {
-		return a.confirmView()
+		return a.confirmModal(bg)
 	}
 
-	topHeight, cmdHeight := a.panelHeights()
+	return bg
+}
+
+func (a *App) normalView() string {topHeight, cmdHeight := a.panelHeights()
 	col1W, col2W, col3W := a.colWidths()
 
 	// Border color per panel
@@ -346,6 +350,89 @@ func (a App) View() string {
 	status := a.statusLine()
 
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, cmdPanel, status)
+}
+
+// placeModal renders a titled modal box centered over the background string
+// by splicing modal lines into the background line-by-line.
+func (a *App) placeModal(bg, title, content string, modalW, modalH int) string {
+	bd := lipgloss.ThickBorder()
+	bStyle := lipgloss.NewStyle().Foreground(focusedBorderColor)
+	boxStyle := lipgloss.NewStyle().
+		Border(bd).
+		BorderForeground(focusedBorderColor).
+		Width(modalW - 2).Height(modalH)
+
+	box := boxStyle.Render(content)
+
+	// Stamp the title into the top border line
+	boxLines := strings.Split(box, "\n")
+	if len(boxLines) > 0 && title != "" {
+		styledTitle := bStyle.Bold(true).Render(title)
+		titleW := lipgloss.Width(styledTitle)
+		fillW := modalW - 4 - titleW
+		if fillW < 0 {
+			fillW = 0
+		}
+		boxLines[0] = bStyle.Render(bd.TopLeft+bd.Top+bd.Top) +
+			styledTitle +
+			bStyle.Render(strings.Repeat(bd.Top, fillW)+bd.TopRight)
+	}
+
+	// Calculate centered position
+	boxH := len(boxLines)
+	startY := (a.height - boxH) / 2
+	startX := (a.width - modalW) / 2
+	if startX < 0 {
+		startX = 0
+	}
+
+	// Splice modal lines into background
+	bgLines := strings.Split(bg, "\n")
+	for i, line := range boxLines {
+		y := startY + i
+		if y < 0 || y >= len(bgLines) {
+			continue
+		}
+		bg := []rune(stripANSI(bgLines[y]))
+		// Pad background line to full width if needed
+		for len(bg) < a.width {
+			bg = append(bg, ' ')
+		}
+		// Replace characters at startX..startX+modalW with modal line
+		lineW := lipgloss.Width(line)
+		end := startX + lineW
+		if end > len(bg) {
+			end = len(bg)
+		}
+		prefix := string(bg[:startX])
+		suffix := ""
+		if end < len(bg) {
+			suffix = string(bg[end:])
+		}
+		bgLines[y] = prefix + line + suffix
+	}
+
+	return strings.Join(bgLines, "\n")
+}
+
+// stripANSI removes ANSI escape sequences to get printable rune count.
+func stripANSI(s string) string {
+	var out strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if inEsc {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // statusLine renders the project path (left) and version (right).
@@ -1220,23 +1307,23 @@ func (a *App) mouseClick(panel Panel, y int) (tea.Model, tea.Cmd) {
 
 // --- Overlay Views ---
 
-func (a *App) creatingView() string {
+func (a *App) creatingModal(bg string) string {
+	modalW := min(80, a.width-4)
 	content := lipgloss.NewStyle().
-		Width(a.width - 6).
-		Height(a.height - 6).
+		Width(modalW - 4).
+		Height(3).
 		Render("\n" + a.textInput.View())
-
-	return renderTitledPanel(focusedBorderColor, "Create Worktree", content, a.width, a.height-4)
+	return a.placeModal(bg, "Create Worktree", content, modalW, 5)
 }
 
-func (a *App) confirmView() string {
+func (a *App) confirmModal(bg string) string {
+	modalW := min(60, a.width-4)
 	content := lipgloss.NewStyle().
-		Width(a.width - 6).
+		Width(modalW - 4).
 		Height(3).
 		Align(lipgloss.Center).
-		Render(a.confirmPrompt)
-
-	return renderTitledPanel(focusedBorderColor, "Confirm", content, a.width, 5)
+		Render("\n" + a.confirmPrompt)
+	return a.placeModal(bg, "Confirm", content, modalW, 5)
 }
 
 func (a *App) detailsOverlay() string {
