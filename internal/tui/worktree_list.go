@@ -19,7 +19,9 @@ func (w WorktreeItem) FilterValue() string { return w.Worktree.Name }
 
 // worktreeDelegate renders worktree items in the list.
 type worktreeDelegate struct {
-	focused bool
+	focused      bool
+	spinnerFrame string
+	activePaths  map[string]bool
 }
 
 func (d *worktreeDelegate) Height() int                               { return 1 }
@@ -33,6 +35,9 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 	}
 
 	row := " " + wt.Worktree.Name
+	if d.activePaths[wt.Worktree.Path] {
+		row += " " + d.spinnerFrame
+	}
 	if wt.Worktree.IsDirty {
 		row += " " + dirtyStyle.Render("*")
 	}
@@ -57,7 +62,7 @@ type WorktreeList struct {
 }
 
 func NewWorktreeList() WorktreeList {
-	d := &worktreeDelegate{}
+	d := &worktreeDelegate{activePaths: make(map[string]bool)}
 	l := list.New(nil, d, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
@@ -73,6 +78,11 @@ func NewWorktreeList() WorktreeList {
 	l.KeyMap.PrevPage.SetKeys("left", "h", "pgup", "b", "u")
 	l.Styles.NoItems = dimStyle
 	return WorktreeList{list: l, delegate: d}
+}
+
+func (w *WorktreeList) SetSpinnerFrame(frame string, activePaths map[string]bool) {
+	w.delegate.spinnerFrame = frame
+	w.delegate.activePaths = activePaths
 }
 
 func (w *WorktreeList) SetItems(items []model.Worktree) tea.Cmd {

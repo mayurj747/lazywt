@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mbency/lazyworktree/internal/config"
@@ -59,6 +60,10 @@ type App struct {
 	lastClickPanel Panel
 	lastClickRow   int
 
+	// Spinner for active post-hook activity per worktree path
+	spinner     spinner.Model
+	activeHooks map[string]int // worktree path -> count of running hooks
+
 	// Keymaps per panel
 	wtKeys     worktreeKeyMap
 	branchKeys branchKeyMap
@@ -84,16 +89,50 @@ type outputLineMsg struct {
 	ch   <-chan tea.Msg // yields outputLineMsg or hookDoneMsg; nil for direct sendOutput calls
 }
 
+type hookStartMsg struct {
+	wtPath string
+}
+
 type hookDoneMsg struct {
 	hookName string
+	wtPath   string
 	exitCode int
 	refresh  bool // whether to reload worktrees/branches after
+}
+
+type deleteResultMsg struct {
+	worktree        *model.Worktree
+	postDeleteHooks []string
+	postDeleteEnv   map[string]string
+	err             error
+}
+
+type createResultMsg struct {
+	worktree        *model.Worktree
+	postCreateHooks []string
+	postCreateEnv   map[string]string
+	err             error
+}
+
+type pruneResultMsg struct {
+	postPruneHooks []string
+	postPruneEnv   map[string]string
+	err            error
+}
+
+type preHookDoneMsg struct {
+	wtPath    string
+	failed    bool
+	onSuccess tea.Cmd
 }
 
 func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 	ti := textinput.New()
 	ti.Placeholder = "branch name"
 	ti.Prompt = "branch> "
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
 
 	return App{
 		list:          NewWorktreeList(),
@@ -109,6 +148,8 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 		textInput:     ti,
 		confirmPrompt: "y/n",
 		lastCursor:    -1,
+		spinner:       sp,
+		activeHooks:   make(map[string]int),
 		wtKeys:        newWorktreeKeyMap(),
 		branchKeys:    newBranchKeyMap(),
 		commitKeys:    newCommitKeyMap(),
@@ -162,14 +203,85 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case hookStartMsg:
+		a.activeHooks[msg.wtPath]++
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(a.spinner.Tick())
+		a.list.SetSpinnerFrame(a.spinner.View(), a.activeHookPaths())
+		return a, tea.Batch(a.spinner.Tick, cmd)
+
+	case spinner.TickMsg:
+		if len(a.activeHooks) == 0 {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(msg)
+		a.list.SetSpinnerFrame(a.spinner.View(), a.activeHookPaths())
+		return a, cmd
+
 	case hookDoneMsg:
+		if a.activeHooks[msg.wtPath] > 0 {
+			a.activeHooks[msg.wtPath]--
+			if a.activeHooks[msg.wtPath] == 0 {
+				delete(a.activeHooks, msg.wtPath)
+			}
+		}
+		a.list.SetSpinnerFrame(a.spinner.View(), a.activeHookPaths())
 		if msg.refresh {
 			return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
 		}
 		return a, nil
+
+	case preHookDoneMsg:
+		if msg.failed {
+			a.decrementSpinner(msg.wtPath)
+			return a, nil
+		}
+		return a, msg.onSuccess
+
+	case deleteResultMsg:
+		a.decrementSpinner(msg.worktree.Path)
+		if msg.err != nil {
+			a.sendOutput("stderr", msg.err.Error(), "git")
+			return a, nil
+		}
+		if len(msg.postDeleteHooks) > 0 {
+			return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(msg.postDeleteHooks, "post_delete", msg.worktree.Path, msg.postDeleteEnv, true))
+		}
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+
+	case createResultMsg:
+		a.decrementSpinner(msg.worktree.Path)
+		if msg.err != nil {
+			a.sendOutput("stderr", msg.err.Error(), "git")
+			return a, nil
+		}
+		if len(msg.postCreateHooks) > 0 {
+			return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(msg.postCreateHooks, "post_create", msg.worktree.Path, msg.postCreateEnv, true))
+		}
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+
+	case pruneResultMsg:
+		if msg.err != nil {
+			a.sendOutput("stderr", msg.err.Error(), "git")
+			return a, nil
+		}
+		if len(msg.postPruneHooks) > 0 {
+			return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(msg.postPruneHooks, "post_prune", "", msg.postPruneEnv, true))
+		}
+		return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
 	}
 
-	return a, nil
+	// Forward unhandled messages (e.g. list.FilterMatchesMsg) to both lists so
+	// bubbles-internal async messages like filter results are delivered.
+	var cmds []tea.Cmd
+	if cmd := a.list.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := a.branchList.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return a, tea.Batch(cmds...)
 }
 
 func (a App) View() string {
@@ -689,7 +801,7 @@ func listenForHookOutput(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-func (a *App) runHookStreaming(hookCmds []string, hookName string, env map[string]string, refresh bool) tea.Cmd {
+func (a *App) runHookStreaming(hookCmds []string, hookName, wtPath string, env map[string]string, refresh bool) tea.Cmd {
 	if len(hookCmds) == 0 {
 		return nil
 	}
@@ -705,24 +817,57 @@ func (a *App) runHookStreaming(hookCmds []string, hookName string, env map[strin
 			})
 			lastExit = result.ExitCode
 		}
-		ch <- hookDoneMsg{hookName: hookName, exitCode: lastExit, refresh: refresh}
+		ch <- hookDoneMsg{hookName: hookName, wtPath: wtPath, exitCode: lastExit, refresh: refresh}
 		close(ch)
 	}()
 
-	return listenForHookOutput(ch)
+	return tea.Batch(func() tea.Msg { return hookStartMsg{wtPath: wtPath} }, listenForHookOutput(ch))
 }
 
-// runPreHookChain runs pre-hooks synchronously, aborting on first failure.
-func (a *App) runPreHookChain(cmds []string, env map[string]string, hookName string) bool {
-	for _, cmd := range cmds {
-		result := a.hookExec.Run(cmd, env)
-		a.sendHookOutput(result, hookName)
-		if result.ExitCode != 0 {
-			a.sendOutput("stderr", hookName+" hook failed, aborting", hookName)
-			return false
+func (a *App) activeHookPaths() map[string]bool {
+	paths := make(map[string]bool, len(a.activeHooks))
+	for p := range a.activeHooks {
+		paths[p] = true
+	}
+	return paths
+}
+
+func (a *App) decrementSpinner(wtPath string) {
+	if a.activeHooks[wtPath] > 0 {
+		a.activeHooks[wtPath]--
+		if a.activeHooks[wtPath] == 0 {
+			delete(a.activeHooks, wtPath)
 		}
 	}
-	return true
+	a.list.SetSpinnerFrame(a.spinner.View(), a.activeHookPaths())
+}
+
+// runPreHookAsync runs pre-hooks in a goroutine, streaming output, then sends
+// preHookDoneMsg. onSuccess is the tea.Cmd to dispatch if all hooks pass.
+func (a *App) runPreHookAsync(hookCmds []string, hookName, wtPath string, env map[string]string, onSuccess tea.Cmd) tea.Cmd {
+	ch := make(chan tea.Msg, 64)
+	hookExec := a.hookExec
+
+	go func() {
+		failed := false
+		for _, cmd := range hookCmds {
+			result := hookExec.RunStreaming(cmd, env, func(ol hooks.OutputLine) {
+				ol.Hook = hookName
+				ch <- outputLineMsg{line: ol, ch: ch}
+			})
+			if result.ExitCode != 0 {
+				failed = true
+				break
+			}
+		}
+		if failed {
+			ch <- outputLineMsg{line: hooks.OutputLine{Stream: "stderr", Text: hookName + " hook failed, aborting", Hook: hookName, Timestamp: time.Now()}}
+		}
+		ch <- preHookDoneMsg{wtPath: wtPath, failed: failed, onSuccess: onSuccess}
+		close(ch)
+	}()
+
+	return tea.Batch(func() tea.Msg { return hookStartMsg{wtPath: wtPath} }, listenForHookOutput(ch))
 }
 
 // --- Action Helpers ---
@@ -764,19 +909,6 @@ func (a *App) sendOutput(stream, text, hook string) {
 	})
 }
 
-func (a *App) sendHookOutput(result hooks.HookResult, hookName string) {
-	for _, line := range strings.Split(result.Stdout, "\n") {
-		if line != "" {
-			a.sendOutput("stdout", line, hookName)
-		}
-	}
-	for _, line := range strings.Split(result.Stderr, "\n") {
-		if line != "" {
-			a.sendOutput("stderr", line, hookName)
-		}
-	}
-}
-
 // openWorktree fires the on_open hook for the given worktree.
 func (a *App) openWorktree(wt *model.Worktree) tea.Cmd {
 	hooks := a.cfg.Hooks.OnOpen
@@ -786,7 +918,7 @@ func (a *App) openWorktree(wt *model.Worktree) tea.Cmd {
 	}
 
 	env := a.buildHookEnv(wt, "open")
-	return a.runHookStreaming(hooks, "on_open", env, false)
+	return a.runHookStreaming(hooks, "on_open", wt.Path, env, false)
 }
 
 func (a *App) handleOpen() tea.Cmd {
@@ -845,31 +977,38 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 
 	a.state = StateNormal
 
+	wtCopy := *worktree
+	repoPath := a.repoPath
+	var postHooks []string
+	var postEnv map[string]string
+	if len(a.cfg.Hooks.PostDelete) > 0 {
+		postHooks = a.cfg.Hooks.PostDelete
+		postEnv = a.buildHookEnv(worktree, "delete")
+	}
+
+	doDelete := tea.Batch(
+		func() tea.Msg { return hookStartMsg{wtPath: wtCopy.Path} },
+		func() tea.Msg {
+			a.sendOutput("stdout", "git worktree remove "+wtCopy.Path, "git")
+			err := git.Delete(repoPath, wtCopy.Path, false)
+			if err != nil {
+				err = git.Delete(repoPath, wtCopy.Path, true)
+			}
+			return deleteResultMsg{
+				worktree:        &wtCopy,
+				postDeleteHooks: postHooks,
+				postDeleteEnv:   postEnv,
+				err:             err,
+			}
+		},
+	)
+
 	if len(a.cfg.Hooks.PreDelete) > 0 {
 		env := a.buildHookEnv(worktree, "delete")
-		if !a.runPreHookChain(a.cfg.Hooks.PreDelete, env, "pre_delete") {
-			return a, nil
-		}
+		return a, a.runPreHookAsync(a.cfg.Hooks.PreDelete, "pre_delete", wtCopy.Path, env, doDelete)
 	}
 
-	a.sendOutput("stdout", "git worktree remove "+worktree.Path, "git")
-	err := git.Delete(a.repoPath, worktree.Path, false)
-	if err != nil {
-		a.sendOutput("stderr", err.Error(), "git")
-		a.sendOutput("stdout", "git worktree remove --force "+worktree.Path, "git")
-		err = git.Delete(a.repoPath, worktree.Path, true)
-		if err != nil {
-			a.sendOutput("stderr", err.Error(), "git")
-			return a, nil
-		}
-	}
-
-	if len(a.cfg.Hooks.PostDelete) > 0 {
-		env := a.buildHookEnv(worktree, "delete")
-		return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(a.cfg.Hooks.PostDelete, "post_delete", env, true))
-	}
-
-	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+	return a, doDelete
 }
 
 func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
@@ -884,62 +1023,67 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 		Name:   branch,
 	}
 
-	if len(a.cfg.Hooks.PreCreate) > 0 {
-		env := a.buildHookEnv(worktree, "create")
-		if !a.runPreHookChain(a.cfg.Hooks.PreCreate, env, "pre_create") {
-			a.textInput.Reset()
-			return a, nil
-		}
-	}
-
-	// If branch already exists, check it out into the worktree; otherwise create it.
-	var err error
-	if git.BranchExists(a.repoPath, branch) {
-		a.sendOutput("stdout", "git worktree add "+wtPath+" "+branch, "git")
-		err = git.Create(a.repoPath, wtPath, "", branch)
-	} else {
-		a.sendOutput("stdout", "git worktree add -b "+branch+" "+wtPath, "git")
-		err = git.Create(a.repoPath, wtPath, branch, "")
-	}
-	if err != nil {
-		a.sendOutput("stderr", err.Error(), "git")
-		a.textInput.Reset()
-		return a, nil
-	}
-
 	a.textInput.Reset()
 
+	repoPath := a.repoPath
+	var postHooks []string
+	var postEnv map[string]string
 	if len(a.cfg.Hooks.PostCreate) > 0 {
-		env := a.buildHookEnv(worktree, "create")
-		return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(a.cfg.Hooks.PostCreate, "post_create", env, true))
+		postHooks = a.cfg.Hooks.PostCreate
+		postEnv = a.buildHookEnv(worktree, "create")
 	}
 
-	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+	doCreate := tea.Batch(
+		func() tea.Msg { return hookStartMsg{wtPath: wtPath} },
+		func() tea.Msg {
+			var err error
+			if git.BranchExists(repoPath, branch) {
+				a.sendOutput("stdout", "git worktree add "+wtPath+" "+branch, "git")
+				err = git.Create(repoPath, wtPath, "", branch)
+			} else {
+				a.sendOutput("stdout", "git worktree add -b "+branch+" "+wtPath, "git")
+				err = git.Create(repoPath, wtPath, branch, "")
+			}
+			return createResultMsg{
+				worktree:        worktree,
+				postCreateHooks: postHooks,
+				postCreateEnv:   postEnv,
+				err:             err,
+			}
+		},
+	)
+
+	if len(a.cfg.Hooks.PreCreate) > 0 {
+		env := a.buildHookEnv(worktree, "create")
+		return a, a.runPreHookAsync(a.cfg.Hooks.PreCreate, "pre_create", wtPath, env, doCreate)
+	}
+
+	return a, doCreate
 }
 
 func (a *App) runPruneAction() (tea.Model, tea.Cmd) {
 	a.state = StateNormal
 
+	repoPath := a.repoPath
+	var postHooks []string
+	var postEnv map[string]string
+	if len(a.cfg.Hooks.PostPrune) > 0 {
+		postHooks = a.cfg.Hooks.PostPrune
+		postEnv = a.buildHookEnv(nil, "prune")
+	}
+
+	doPrune := func() tea.Msg {
+		a.sendOutput("stdout", "git worktree prune", "git")
+		err := git.Prune(repoPath)
+		return pruneResultMsg{postPruneHooks: postHooks, postPruneEnv: postEnv, err: err}
+	}
+
 	if len(a.cfg.Hooks.PrePrune) > 0 {
 		env := a.buildHookEnv(nil, "prune")
-		if !a.runPreHookChain(a.cfg.Hooks.PrePrune, env, "pre_prune") {
-			return a, nil
-		}
+		return a, a.runPreHookAsync(a.cfg.Hooks.PrePrune, "pre_prune", "", env, doPrune)
 	}
 
-	a.sendOutput("stdout", "git worktree prune", "git")
-	err := git.Prune(a.repoPath)
-	if err != nil {
-		a.sendOutput("stderr", err.Error(), "git")
-		return a, nil
-	}
-
-	if len(a.cfg.Hooks.PostPrune) > 0 {
-		env := a.buildHookEnv(nil, "prune")
-		return a, tea.Batch(a.loadWorktrees(), a.loadBranches(), a.runHookStreaming(a.cfg.Hooks.PostPrune, "post_prune", env, true))
-	}
-
-	return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
+	return a, doPrune
 }
 
 // --- Mouse handling ---
