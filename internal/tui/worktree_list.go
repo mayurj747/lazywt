@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,11 +24,14 @@ type worktreeDelegate struct {
 	focused      bool
 	spinnerFrame string
 	activePaths  map[string]bool
+	showPath     bool
+	pathStyle    string // "relative" or "absolute"
+	projectRoot  string // used to compute relative paths
 }
 
-func (d *worktreeDelegate) Height() int                               { return 1 }
-func (d *worktreeDelegate) Spacing() int                              { return 0 }
-func (d *worktreeDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd   { return nil }
+func (d *worktreeDelegate) Height() int                             { return 1 }
+func (d *worktreeDelegate) Spacing() int                            { return 0 }
+func (d *worktreeDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	wt, ok := item.(WorktreeItem)
@@ -34,12 +39,44 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		return
 	}
 
-	row := " " + wt.Worktree.Name
+	name := wt.Worktree.Name
+	if wt.Worktree.IsMain {
+		name = "● " + name
+	} else {
+		name = "  " + name
+	}
+
+	var parts []string
+	parts = append(parts, name)
+
+	if d.showPath && wt.Worktree.Path != "" {
+		p := wt.Worktree.Path
+		if d.pathStyle != "absolute" && d.projectRoot != "" {
+			if rel, err := filepath.Rel(d.projectRoot, p); err == nil {
+				p = rel
+			}
+		}
+		parts = append(parts, dimStyle.Render(p))
+	}
+
+	if wt.Worktree.LastCommitHash != "" {
+		commit := wt.Worktree.LastCommitHash
+		if wt.Worktree.LastCommitSubject != "" {
+			commit += " " + wt.Worktree.LastCommitSubject
+		}
+		parts = append(parts, dimStyle.Render(commit))
+	}
+
+	row := strings.Join(parts, "  ")
+
 	if d.activePaths[wt.Worktree.Path] {
 		row += " " + d.spinnerFrame
 	}
 	if wt.Worktree.IsDirty {
 		row += " " + dirtyStyle.Render("*")
+	}
+	if wt.Worktree.IsPathMissing {
+		row += " " + dimStyle.Render("[missing]")
 	}
 
 	isSelected := index == m.Index()
@@ -78,6 +115,13 @@ func NewWorktreeList() WorktreeList {
 	l.KeyMap.PrevPage.SetKeys("left", "h", "pgup", "b", "u")
 	l.Styles.NoItems = dimStyle
 	return WorktreeList{list: l, delegate: d}
+}
+
+// SetDisplayConfig propagates display settings to the delegate.
+func (w *WorktreeList) SetDisplayConfig(showPath bool, pathStyle, projectRoot string) {
+	w.delegate.showPath = showPath
+	w.delegate.pathStyle = pathStyle
+	w.delegate.projectRoot = projectRoot
 }
 
 func (w *WorktreeList) SetSpinnerFrame(frame string, activePaths map[string]bool) {

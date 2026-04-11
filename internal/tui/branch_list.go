@@ -12,8 +12,8 @@ import (
 
 // BranchItem represents a branch in the list.
 type BranchItem struct {
-	Name         string
-	HasWorktree  bool
+	Name        string
+	HasWorktree bool
 }
 
 func (b BranchItem) FilterValue() string { return b.Name }
@@ -23,9 +23,9 @@ type branchDelegate struct {
 	focused bool
 }
 
-func (d *branchDelegate) Height() int                               { return 1 }
-func (d *branchDelegate) Spacing() int                              { return 0 }
-func (d *branchDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd   { return nil }
+func (d *branchDelegate) Height() int                             { return 1 }
+func (d *branchDelegate) Spacing() int                            { return 0 }
+func (d *branchDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d *branchDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	bi, ok := item.(BranchItem)

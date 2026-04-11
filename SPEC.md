@@ -145,7 +145,7 @@ Every hook receives context via environment variables:
 | `LW_ACTION` | The action name (create, delete, open, prune) | All hooks |
 | `LW_PROJECT` | Absolute path to the project root | All hooks |
 | `LW_BARE_REPO` | Absolute path to the bare repo | All hooks |
-| `LW_IS_DIRTY` | "true" or "false" | on_open |
+| `LW_IS_DIRTY` | `"1"` if dirty, `"0"` if clean | on_open |
 
 ## Bare Repo Support
 First-class. lazyworktree detects whether the repo is bare and adjusts path resolution accordingly. The `lw init` command creates bare repos by default — this is the intended workflow.

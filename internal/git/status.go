@@ -33,25 +33,25 @@ func LastCommit(worktreePath string) (hash, subject string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// DetailedCommit returns full hash, author, date, and subject of the most recent commit.
+// DetailedCommit returns short hash, full hash, author, date, and subject of the most recent commit.
 // Uses a pipe delimiter (│) that's unlikely to appear in commit messages.
-func DetailedCommit(worktreePath string) (fullHash, author, date, subject string, err error) {
-	cmd := exec.Command("git", "-C", worktreePath, "log", "-1", "--format=%H│%an│%ai│%s")
+func DetailedCommit(worktreePath string) (shortHash, fullHash, author, date, subject string, err error) {
+	cmd := exec.Command("git", "-C", worktreePath, "log", "-1", "--format=%h│%H│%an│%ai│%s")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
-	parts := strings.SplitN(strings.TrimSpace(out.String()), "│", 4)
-	if len(parts) < 4 {
-		return parts[0], "", "", "", nil
+	parts := strings.SplitN(strings.TrimSpace(out.String()), "│", 5)
+	if len(parts) < 5 {
+		return parts[0], "", "", "", "", nil
 	}
 
-	parsedDate, err := time.Parse("2006-01-02 15:04:05 -0700", parts[2])
+	parsedDate, err := time.Parse("2006-01-02 15:04:05 -0700", parts[3])
 	if err != nil {
-		return parts[0], parts[1], parts[2], parts[3], nil
+		return parts[0], parts[1], parts[2], parts[3], parts[4], nil
 	}
-	return parts[0], parts[1], parsedDate.Format(time.RFC3339), parts[3], nil
+	return parts[0], parts[1], parts[2], parsedDate.Format(time.RFC3339), parts[4], nil
 }
 
 // TrackingBranch returns the upstream tracking branch for the current branch,

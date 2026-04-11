@@ -114,12 +114,3 @@ func RepoRoot(path string) (string, error) {
 	}
 	return string(out[:len(out)-1]), nil
 }
-
-func BareRepoGitDir(path string) (string, error) {
-	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out[:len(out)-1]), nil
-}

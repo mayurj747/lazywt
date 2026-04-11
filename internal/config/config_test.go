@@ -56,8 +56,8 @@ shell = "bash -c"
 	if cfg.ShowPath() != false {
 		t.Errorf("ShowPath() = %v, want false", cfg.ShowPath())
 	}
-	if cfg.PathStyle() != "absolute" {
-		t.Errorf("PathStyle() = %q, want %q", cfg.PathStyle(), "absolute")
+	if ps, _ := cfg.PathStyle(); ps != "absolute" {
+		t.Errorf("PathStyle() = %q, want %q", ps, "absolute")
 	}
 
 	// General
@@ -75,14 +75,26 @@ func TestDefaults_EmptyConfig(t *testing.T) {
 	if cfg.ShowPath() != DefaultShowPath {
 		t.Errorf("ShowPath() = %v, want %v", cfg.ShowPath(), DefaultShowPath)
 	}
-	if cfg.PathStyle() != DefaultPathStyle {
-		t.Errorf("PathStyle() = %q, want %q", cfg.PathStyle(), DefaultPathStyle)
+	if ps, _ := cfg.PathStyle(); ps != DefaultPathStyle {
+		t.Errorf("PathStyle() = %q, want %q", ps, DefaultPathStyle)
 	}
 	if cfg.DefaultPathDir() != DefaultDefPath {
 		t.Errorf("DefaultPathDir() = %q, want %q", cfg.DefaultPathDir(), DefaultDefPath)
 	}
 	if cfg.ShellCmd() != DefaultShell {
 		t.Errorf("ShellCmd() = %q, want %q", cfg.ShellCmd(), DefaultShell)
+	}
+}
+
+func TestPathStyle_InvalidValue(t *testing.T) {
+	bad := "diagonal"
+	cfg := &Config{Display: DisplayConfig{PathStyle: &bad}}
+	ps, err := cfg.PathStyle()
+	if err == nil {
+		t.Errorf("PathStyle() with invalid value expected error, got nil")
+	}
+	if ps != DefaultPathStyle {
+		t.Errorf("PathStyle() fallback = %q, want %q", ps, DefaultPathStyle)
 	}
 }
 
@@ -207,8 +219,8 @@ default_path = "worktrees"
 	if cfg.ShellCmd() != "bash -c" {
 		t.Errorf("ShellCmd() = %q, want %q", cfg.ShellCmd(), "bash -c")
 	}
-	if cfg.PathStyle() != "relative" {
-		t.Errorf("PathStyle() = %q, want %q", cfg.PathStyle(), "relative")
+	if ps, _ := cfg.PathStyle(); ps != "relative" {
+		t.Errorf("PathStyle() = %q, want %q", ps, "relative")
 	}
 }
 

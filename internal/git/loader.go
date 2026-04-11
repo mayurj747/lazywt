@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,7 +88,7 @@ func parseStanza(stanza string) (model.Worktree, bool, error) {
 		}
 	}
 
-	if _, err := os.Stat(wt.Path); os.IsNotExist(err) {
+	if _, err := os.Stat(wt.Path); errors.Is(err, os.ErrNotExist) {
 		wt.IsPathMissing = true
 	}
 
@@ -117,11 +118,9 @@ func EnrichWorktreesConcurrent(worktrees []model.Worktree) {
 			dirty, _ := IsDirty(wt.Path)
 			wt.IsDirty = dirty
 
-			hash, subject, _ := LastCommit(wt.Path)
-			wt.LastCommitHash = hash
-			wt.LastCommitSubject = subject
-
-			fullHash, author, date, sub, _ := DetailedCommit(wt.Path)
+			// DetailedCommit returns both short and full hash; LastCommit is not needed.
+			shortHash, fullHash, author, date, sub, _ := DetailedCommit(wt.Path)
+			wt.LastCommitHash = shortHash
 			wt.LastCommitFullHash = fullHash
 			wt.LastCommitAuthor = author
 			wt.LastCommitDate, _ = time.Parse(time.RFC3339, date)

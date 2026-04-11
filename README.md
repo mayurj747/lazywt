@@ -138,7 +138,8 @@ All hooks receive:
 | Variable | Description |
 |----------|-------------|
 | `LW_ACTION` | The action being performed (`create`, `delete`, `open`, `prune`) |
-| `LW_REPO_PATH` | Path to the bare repo / git dir |
+| `LW_PROJECT` | Absolute path to the project root |
+| `LW_BARE_REPO` | Absolute path to the bare repo / git dir |
 | `LW_PATH` | Path to the worktree (empty for prune) |
 | `LW_BRANCH` | Branch name (empty for prune) |
 
@@ -154,7 +155,7 @@ Pre-hooks (`pre_create`, `pre_delete`, `pre_prune`) run synchronously before the
 
 ### Post-hook behavior
 
-Post-hooks (`post_create`, `post_delete`, `post_prune`) and event hooks (`on_open`, `on_switch`) run asynchronously with output streamed to the command output panel.
+Post-hooks (`post_create`, `post_delete`, `post_prune`) and event hooks (`on_open`) run asynchronously with output streamed to the command output panel.
 
 ## Hook chaining
 

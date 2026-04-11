@@ -39,22 +39,22 @@ const (
 )
 
 type App struct {
-	list          WorktreeList
-	branchList    BranchList
-	commitView    CommitView
-	cmdPane       CommandPane
-	focused       Panel
-	state         AppState
-	width         int
-	height        int
-	cfg           *config.Config
-	repoPath      string // bare repo or git dir (for git commands)
-	projectRoot   string // lw project root (for placing worktrees)
-	hookExec      *hooks.Executor
-	textInput     textinput.Model
-	confirmPrompt string
-	commitLabel   string // branch/worktree name shown in the commit pane title
-	lastCursor    int
+	list           WorktreeList
+	branchList     BranchList
+	commitView     CommitView
+	cmdPane        CommandPane
+	focused        Panel
+	state          AppState
+	width          int
+	height         int
+	cfg            *config.Config
+	repoPath       string // bare repo or git dir (for git commands)
+	projectRoot    string // lw project root (for placing worktrees)
+	hookExec       *hooks.Executor
+	textInput      textinput.Model
+	confirmPrompt  string
+	commitLabel    string // branch/worktree name shown in the commit pane title
+	lastCursor     int
 	showCommit     bool
 	lastClickTime  time.Time // for double-click detection
 	lastClickPanel Panel
@@ -69,7 +69,6 @@ type App struct {
 	branchKeys branchKeyMap
 	commitKeys commitKeyMap
 	cmdKeys    cmdKeyMap
-
 }
 
 type worktreesLoadedMsg struct {
@@ -104,6 +103,7 @@ type deleteResultMsg struct {
 	worktree        *model.Worktree
 	postDeleteHooks []string
 	postDeleteEnv   map[string]string
+	logLine         string // git command echoed to output pane
 	err             error
 }
 
@@ -111,12 +111,14 @@ type createResultMsg struct {
 	worktree        *model.Worktree
 	postCreateHooks []string
 	postCreateEnv   map[string]string
+	logLine         string // git command echoed to output pane
 	err             error
 }
 
 type pruneResultMsg struct {
 	postPruneHooks []string
 	postPruneEnv   map[string]string
+	logLine        string // git command echoed to output pane
 	err            error
 }
 
@@ -134,8 +136,12 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
+	wl := NewWorktreeList()
+	pathStyle, _ := cfg.PathStyle() // invalid values fall back to "relative"
+	wl.SetDisplayConfig(cfg.ShowPath(), pathStyle, projectRoot)
+
 	return App{
-		list:          NewWorktreeList(),
+		list:          wl,
 		branchList:    NewBranchList(),
 		commitView:    NewCommitView(),
 		cmdPane:       NewCommandPane(),
@@ -241,6 +247,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case deleteResultMsg:
 		a.decrementSpinner(msg.worktree.Path)
+		if msg.logLine != "" {
+			a.sendOutput("stdout", msg.logLine, "git")
+		}
 		if msg.err != nil {
 			a.sendOutput("stderr", msg.err.Error(), "git")
 			return a, nil
@@ -252,6 +261,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case createResultMsg:
 		a.decrementSpinner(msg.worktree.Path)
+		if msg.logLine != "" {
+			a.sendOutput("stdout", msg.logLine, "git")
+		}
 		if msg.err != nil {
 			a.sendOutput("stderr", msg.err.Error(), "git")
 			return a, nil
@@ -262,6 +274,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(a.loadWorktrees(), a.loadBranches())
 
 	case pruneResultMsg:
+		if msg.logLine != "" {
+			a.sendOutput("stdout", msg.logLine, "git")
+		}
 		if msg.err != nil {
 			a.sendOutput("stderr", msg.err.Error(), "git")
 			return a, nil
@@ -303,7 +318,8 @@ func (a App) View() string {
 	return bg
 }
 
-func (a *App) normalView() string {topHeight, cmdHeight := a.panelHeights()
+func (a *App) normalView() string {
+	topHeight, cmdHeight := a.panelHeights()
 	col1W, col2W, col3W := a.colWidths()
 
 	// Border color per panel
@@ -415,22 +431,58 @@ func (a *App) placeModal(bg, title, content string, modalW, modalH int) string {
 	return strings.Join(bgLines, "\n")
 }
 
-// stripANSI removes ANSI escape sequences to get printable rune count.
+// stripANSI removes ANSI/VT escape sequences to get printable runes.
+// Handles:
+//   - CSI sequences: ESC [ ... <final byte A-Z a-z>
+//   - OSC sequences: ESC ] ... BEL or ESC \
+//   - Other Fe sequences: ESC <byte 0x40-0x5F> (two-byte, no params)
 func stripANSI(s string) string {
 	var out strings.Builder
-	inEsc := false
-	for _, r := range s {
-		if inEsc {
-			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-				inEsc = false
+	runes := []rune(s)
+	i := 0
+	for i < len(runes) {
+		r := runes[i]
+		if r != '\x1b' {
+			out.WriteRune(r)
+			i++
+			continue
+		}
+		// ESC — look at next byte to classify sequence type
+		i++
+		if i >= len(runes) {
+			break
+		}
+		next := runes[i]
+		switch {
+		case next == '[': // CSI: consume until final byte [A-Za-z]
+			i++
+			for i < len(runes) {
+				c := runes[i]
+				i++
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+					break
+				}
 			}
-			continue
+		case next == ']': // OSC: consume until BEL or ESC \
+			i++
+			for i < len(runes) {
+				c := runes[i]
+				i++
+				if c == '\a' { // BEL
+					break
+				}
+				if c == '\x1b' && i < len(runes) && runes[i] == '\\' { // ST
+					i++
+					break
+				}
+			}
+		case next >= 0x40 && next <= 0x5F: // Other Fe sequences (two-byte)
+			i++
+		default:
+			// Unknown — skip the ESC but keep the next character
+			out.WriteRune(next)
+			i++
 		}
-		if r == '\x1b' {
-			inEsc = true
-			continue
-		}
-		out.WriteRune(r)
 	}
 	return out.String()
 }
@@ -969,7 +1021,8 @@ func (a *App) buildHookEnv(worktree *model.Worktree, action string) map[string]s
 
 	env := map[string]string{
 		"LW_ACTION":    action,
-		"LW_REPO_PATH": a.repoPath,
+		"LW_PROJECT":   a.projectRoot,
+		"LW_BARE_REPO": a.repoPath,
 		"LW_PATH":      wtPath,
 		"LW_BRANCH":    branch,
 	}
@@ -1076,7 +1129,7 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 	doDelete := tea.Batch(
 		func() tea.Msg { return hookStartMsg{wtPath: wtCopy.Path} },
 		func() tea.Msg {
-			a.sendOutput("stdout", "git worktree remove "+wtCopy.Path, "git")
+			logLine := "git worktree remove " + wtCopy.Path
 			err := git.Delete(repoPath, wtCopy.Path, false)
 			if err != nil {
 				err = git.Delete(repoPath, wtCopy.Path, true)
@@ -1085,6 +1138,7 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 				worktree:        &wtCopy,
 				postDeleteHooks: postHooks,
 				postDeleteEnv:   postEnv,
+				logLine:         logLine,
 				err:             err,
 			}
 		},
@@ -1123,18 +1177,20 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 	doCreate := tea.Batch(
 		func() tea.Msg { return hookStartMsg{wtPath: wtPath} },
 		func() tea.Msg {
+			var logLine string
 			var err error
 			if git.BranchExists(repoPath, branch) {
-				a.sendOutput("stdout", "git worktree add "+wtPath+" "+branch, "git")
+				logLine = "git worktree add " + wtPath + " " + branch
 				err = git.Create(repoPath, wtPath, "", branch)
 			} else {
-				a.sendOutput("stdout", "git worktree add -b "+branch+" "+wtPath, "git")
+				logLine = "git worktree add -b " + branch + " " + wtPath
 				err = git.Create(repoPath, wtPath, branch, "")
 			}
 			return createResultMsg{
 				worktree:        worktree,
 				postCreateHooks: postHooks,
 				postCreateEnv:   postEnv,
+				logLine:         logLine,
 				err:             err,
 			}
 		},
@@ -1160,9 +1216,8 @@ func (a *App) runPruneAction() (tea.Model, tea.Cmd) {
 	}
 
 	doPrune := func() tea.Msg {
-		a.sendOutput("stdout", "git worktree prune", "git")
 		err := git.Prune(repoPath)
-		return pruneResultMsg{postPruneHooks: postHooks, postPruneEnv: postEnv, err: err}
+		return pruneResultMsg{postPruneHooks: postHooks, postPruneEnv: postEnv, logLine: "git worktree prune", err: err}
 	}
 
 	if len(a.cfg.Hooks.PrePrune) > 0 {

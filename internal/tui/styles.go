@@ -7,18 +7,13 @@ import (
 )
 
 var (
-	focusedBorderColor lipgloss.Color = "62"
-	blurredBorderColor lipgloss.Color = "240"
-
-	focusedBorder  = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(focusedBorderColor)
-	blurredBorder  = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(blurredBorderColor)
-	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62"))
-	dimStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	highlightStyle         = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
-	inactiveHighlightStyle = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("250"))
-	dirtyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	stderrStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	focusedBorderColor     lipgloss.Color = "62"
+	blurredBorderColor     lipgloss.Color = "240"
+	dimStyle                              = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	highlightStyle                        = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+	inactiveHighlightStyle                = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("250"))
+	dirtyStyle                            = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	stderrStyle                           = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
 // renderTitledPanel renders content inside a rounded border with the title

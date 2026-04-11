@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -23,7 +24,7 @@ type rawHooksModeConfig struct {
 	PostCreate string `toml:"post_create"`
 	PreDelete  string `toml:"pre_delete"`
 	PostDelete string `toml:"post_delete"`
-	OnOpen string `toml:"on_open"`
+	OnOpen     string `toml:"on_open"`
 	PrePrune   string `toml:"pre_prune"`
 	PostPrune  string `toml:"post_prune"`
 }
@@ -116,11 +117,18 @@ func (c *Config) ShowPath() bool {
 }
 
 // PathStyle returns the effective path_style value, applying defaults.
-func (c *Config) PathStyle() string {
+// Returns an error if the configured value is not "relative" or "absolute".
+func (c *Config) PathStyle() (string, error) {
 	if c.Display.PathStyle != nil {
-		return *c.Display.PathStyle
+		v := *c.Display.PathStyle
+		switch v {
+		case "relative", "absolute":
+			return v, nil
+		default:
+			return DefaultPathStyle, fmt.Errorf("invalid path_style %q: must be \"relative\" or \"absolute\"", v)
+		}
 	}
-	return DefaultPathStyle
+	return DefaultPathStyle, nil
 }
 
 // DefaultPathDir returns the effective default_path value, applying defaults.
