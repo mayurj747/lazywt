@@ -879,7 +879,7 @@ func (a *App) loadWorktrees() tea.Cmd {
 		if err != nil {
 			return worktreesLoadedMsg{worktrees: nil}
 		}
-		git.EnrichWorktreesConcurrent(worktrees)
+		git.EnrichWorktreesConcurrent(worktrees, repoPath)
 		return worktreesLoadedMsg{worktrees: worktrees}
 	}
 }
@@ -1104,7 +1104,11 @@ func (a *App) handleDeleteRequest() (tea.Model, tea.Cmd) {
 	}
 
 	a.state = StateConfirmingDelete
-	a.confirmPrompt = "delete " + worktree.Name + "? (y/n)"
+	if worktree.IsIntegrated {
+		a.confirmPrompt = "delete " + worktree.Name + "? (y/n)"
+	} else {
+		a.confirmPrompt = "delete " + worktree.Name + "? (y/n)\n\n  ⚠  branch not yet merged"
+	}
 	return a, nil
 }
 
@@ -1373,12 +1377,16 @@ func (a *App) creatingModal(bg string) string {
 
 func (a *App) confirmModal(bg string) string {
 	modalW := min(60, a.width-4)
+	// Grow the modal height to fit extra warning lines in the prompt.
+	extraLines := strings.Count(a.confirmPrompt, "\n")
+	contentH := 3 + extraLines
+	modalH := contentH + 2 // +2 for top/bottom border
 	content := lipgloss.NewStyle().
 		Width(modalW - 4).
-		Height(3).
+		Height(contentH).
 		Align(lipgloss.Center).
 		Render("\n" + a.confirmPrompt)
-	return a.placeModal(bg, "Confirm", content, modalW, 5)
+	return a.placeModal(bg, "Confirm", content, modalW, modalH)
 }
 
 func (a *App) detailsOverlay() string {

@@ -46,6 +46,8 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		name = "  " + name
 	}
 
+	isSelected := index == m.Index()
+
 	var parts []string
 	parts = append(parts, name)
 
@@ -56,15 +58,13 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 				p = rel
 			}
 		}
-		parts = append(parts, dimStyle.Render(p))
-	}
-
-	if wt.Worktree.LastCommitHash != "" {
-		commit := wt.Worktree.LastCommitHash
-		if wt.Worktree.LastCommitSubject != "" {
-			commit += " " + wt.Worktree.LastCommitSubject
+		// Dim the path only when unselected; on the highlight background the
+		// dim color (240) becomes invisible.
+		if isSelected {
+			parts = append(parts, p)
+		} else {
+			parts = append(parts, dimStyle.Render(p))
 		}
-		parts = append(parts, dimStyle.Render(commit))
 	}
 
 	row := strings.Join(parts, "  ")
@@ -73,13 +73,27 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		row += " " + d.spinnerFrame
 	}
 	if wt.Worktree.IsDirty {
-		row += " " + dirtyStyle.Render("*")
+		if isSelected {
+			row += " *"
+		} else {
+			row += " " + dirtyStyle.Render("*")
+		}
+	}
+	if wt.Worktree.IsIntegrated {
+		if isSelected {
+			row += " [merged]"
+		} else {
+			row += " " + mergedStyle.Render("[merged]")
+		}
 	}
 	if wt.Worktree.IsPathMissing {
-		row += " " + dimStyle.Render("[missing]")
+		if isSelected {
+			row += " [missing]"
+		} else {
+			row += " " + dimStyle.Render("[missing]")
+		}
 	}
 
-	isSelected := index == m.Index()
 	if isSelected {
 		if d.focused {
 			row = highlightStyle.Width(m.Width()).Render(row)

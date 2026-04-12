@@ -104,7 +104,13 @@ func deriveName(path, repoPath string) string {
 	return leaf
 }
 
-func EnrichWorktreesConcurrent(worktrees []model.Worktree) {
+// EnrichWorktreesConcurrent runs all enrichment queries for each worktree in
+// parallel. repoPath is the bare repo / git common dir used for repo-level
+// queries (default branch detection, merge-tree).
+func EnrichWorktreesConcurrent(worktrees []model.Worktree, repoPath string) {
+	// Detect the default branch once; used for the integration check.
+	defaultBranch := DefaultBranch(repoPath)
+
 	var wg sync.WaitGroup
 
 	for i := range worktrees {
@@ -128,6 +134,12 @@ func EnrichWorktreesConcurrent(worktrees []model.Worktree) {
 
 			tracking, _ := TrackingBranch(wt.Path)
 			wt.TrackingBranch = tracking
+
+			// Integration check: is the branch's work already in the default branch?
+			// Skip the main worktree (it IS the default branch) and detached HEADs.
+			if !wt.IsMain && wt.Branch != "" && wt.Branch != defaultBranch {
+				wt.IsIntegrated = IsIntegrated(repoPath, wt.Path, defaultBranch)
+			}
 		}(&worktrees[i])
 	}
 

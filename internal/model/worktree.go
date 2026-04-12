@@ -15,6 +15,7 @@ type Worktree struct {
 	LastCommitHash    string // Short commit hash (e.g. "a1b2c3f")
 	LastCommitSubject string // First line of commit message
 	IsDirty           bool   // True if working tree has uncommitted changes
+	IsIntegrated      bool   // True if branch changes are already in the default branch (stale)
 
 	// Detail fields (for the details panel)
 	LastCommitFullHash string    // Full 40-char commit hash

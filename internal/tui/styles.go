@@ -13,6 +13,7 @@ var (
 	highlightStyle                        = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
 	inactiveHighlightStyle                = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(lipgloss.Color("250"))
 	dirtyStyle                            = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	mergedStyle                           = lipgloss.NewStyle().Foreground(lipgloss.Color("71")) // muted green
 	stderrStyle                           = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
