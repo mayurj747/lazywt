@@ -71,6 +71,8 @@ type App struct {
 	cmdKeys    cmdKeyMap
 }
 
+type tickMsg time.Time
+
 type worktreesLoadedMsg struct {
 	worktrees []model.Worktree
 }
@@ -164,11 +166,22 @@ func NewApp(cfg *config.Config, repoPath, projectRoot string) App {
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(a.loadWorktrees(), a.loadBranches())
+	return tea.Batch(
+		a.loadWorktrees(),
+		a.loadBranches(),
+		tea.Tick(5*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }),
+	)
 }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tickMsg:
+		return a, tea.Batch(
+			a.loadWorktrees(),
+			a.loadBranches(),
+			tea.Tick(5*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) }),
+		)
+
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
