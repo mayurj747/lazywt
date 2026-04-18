@@ -19,12 +19,5 @@
             pkgs.gotools  # goimports, etc.
           ];
         };
-
-        packages.default = pkgs.buildGoModule {
-          pname = "lw";
-          version = "0.1.0";
-          src = ./.;
-          vendorHash = null;
-        };
       });
 }
