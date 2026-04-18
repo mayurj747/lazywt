@@ -27,9 +27,6 @@ func ListWorktrees(repoPath string) ([]model.Worktree, error) {
 	}
 
 	for i := range worktrees {
-		if i == 0 {
-			worktrees[i].IsMain = true
-		}
 		worktrees[i].Name = deriveName(worktrees[i].Path, repoPath)
 	}
 
@@ -41,6 +38,8 @@ func parsePorcelain(output string) ([]model.Worktree, error) {
 	stanzas := strings.Split(strings.TrimSpace(output), "\n\n")
 
 	var worktrees []model.Worktree
+	firstStanza := true
+	firstIsBare := false
 	for _, stanza := range stanzas {
 		if stanza == "" {
 			continue
@@ -49,11 +48,23 @@ func parsePorcelain(output string) ([]model.Worktree, error) {
 		if err != nil {
 			return nil, err
 		}
+		if firstStanza {
+			firstIsBare = isBare
+			firstStanza = false
+		}
 		// Skip the bare repo entry — it's not a real worktree.
 		if isBare {
 			continue
 		}
 		worktrees = append(worktrees, wt)
+	}
+
+	// In regular repos, the first stanza is the main worktree and is visible.
+	// In bare-repo layouts, the first stanza is the bare repo entry (filtered
+	// out above), so none of the user-facing linked worktrees should be marked
+	// as main.
+	if !firstIsBare && len(worktrees) > 0 {
+		worktrees[0].IsMain = true
 	}
 
 	return worktrees, nil

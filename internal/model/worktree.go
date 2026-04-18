@@ -8,7 +8,7 @@ type Worktree struct {
 	Path          string // Absolute path to the worktree
 	Branch        string // Branch checked out (empty for detached HEAD)
 	Name          string // Display name, derived from path (uniquified leaf)
-	IsMain        bool   // True if this is the main worktree (first in porcelain output)
+	IsMain        bool   // True if this is git's main non-bare worktree (false in bare-repo layouts)
 	IsPathMissing bool   // True if the worktree path no longer exists on disk
 
 	// Enrichment fields (from git log, git status)

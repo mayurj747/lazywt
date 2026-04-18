@@ -146,3 +146,66 @@ branch refs/heads/main`,
 		})
 	}
 }
+
+func TestParsePorcelain_MainDetection(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantLen       int
+		wantMainIndex int
+	}{
+		{
+			name: "regular repo marks first worktree as main",
+			input: `worktree /home/user/project
+HEAD abc123def456
+branch refs/heads/main
+
+worktree /home/user/project/worktrees/feat-x
+HEAD def456abc789
+branch refs/heads/feat-x
+`,
+			wantLen:       2,
+			wantMainIndex: 0,
+		},
+		{
+			name: "bare repo layout marks no linked worktree as main",
+			input: `worktree /home/user/project.git
+bare
+
+worktree /home/user/project/worktrees/main
+HEAD abc123def456
+branch refs/heads/main
+
+worktree /home/user/project/worktrees/feat-x
+HEAD def456abc789
+branch refs/heads/feat-x
+`,
+			wantLen:       2,
+			wantMainIndex: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worktrees, err := parsePorcelain(tt.input)
+			if err != nil {
+				t.Fatalf("parsePorcelain error: %v", err)
+			}
+			if len(worktrees) != tt.wantLen {
+				t.Fatalf("len(worktrees) = %d, want %d", len(worktrees), tt.wantLen)
+			}
+
+			mainIndex := -1
+			for i, wt := range worktrees {
+				if wt.IsMain {
+					mainIndex = i
+					break
+				}
+			}
+
+			if mainIndex != tt.wantMainIndex {
+				t.Errorf("mainIndex = %d, want %d", mainIndex, tt.wantMainIndex)
+			}
+		})
+	}
+}
