@@ -19,18 +19,19 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Compute and push next patch tag
-        id: tag
+      - name: Compute next version
+        uses: reecetech/version-increment@2024.10.1
+        id: version
+        with:
+          scheme: conventional_commits
+          increment: patch
+
+      - name: Push tag
         run: |
-          latest=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-          version="${latest:-v0.0.0}"
-          IFS='.' read -r major minor patch <<< "${version#v}"
-          new_tag="v${major}.${minor}.$((patch + 1))"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$new_tag"
-          git push origin "$new_tag"
-          echo "tag=${new_tag}" >> $GITHUB_OUTPUT
+          git tag ${{ steps.version.outputs.v-version }}
+          git push origin ${{ steps.version.outputs.v-version }}
 
       - uses: goreleaser/goreleaser-action@v7
         with:
