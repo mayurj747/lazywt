@@ -78,7 +78,7 @@ type worktreesLoadedMsg struct {
 }
 
 type branchesLoadedMsg struct {
-	branches []string
+	branches []git.Branch
 }
 
 type commitLoadedMsg struct {
@@ -926,14 +926,14 @@ func (a *App) loadCommitForSelectedWorktree() tea.Cmd {
 }
 
 func (a *App) loadCommitForSelectedBranch() tea.Cmd {
-	branch := a.branchList.Selected()
-	if branch == "" {
+	branchRef := a.branchList.SelectedRef()
+	if branchRef == "" {
 		return nil
 	}
-	a.commitLabel = branch
+	a.commitLabel = branchRef
 	repoPath := a.repoPath
 	return func() tea.Msg {
-		content, err := git.ShowHead(repoPath, "", branch)
+		content, err := git.ShowHead(repoPath, "", branchRef)
 		if err != nil {
 			return commitLoadedMsg{content: "(error loading commit: " + err.Error() + ")"}
 		}
@@ -1086,7 +1086,7 @@ func (a *App) handleOpen() tea.Cmd {
 //   - branch has a worktree → fire on_open for that worktree
 //   - branch has no worktree → pre-fill create dialog with branch name
 func (a *App) handleBranchOpen() (tea.Model, tea.Cmd) {
-	branch := a.branchList.Selected()
+	branch := a.branchList.SelectedCreateName()
 	if branch == "" {
 		return a, nil
 	}
@@ -1199,6 +1199,9 @@ func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 			if git.BranchExists(repoPath, branch) {
 				logLine = "git worktree add " + wtPath + " " + branch
 				err = git.Create(repoPath, wtPath, "", branch)
+			} else if remoteRef := a.branchList.RemoteRef(branch); remoteRef != "" {
+				logLine = "git worktree add -b " + branch + " " + wtPath + " " + remoteRef
+				err = git.Create(repoPath, wtPath, branch, remoteRef)
 			} else {
 				logLine = "git worktree add -b " + branch + " " + wtPath
 				err = git.Create(repoPath, wtPath, branch, "")
