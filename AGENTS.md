@@ -172,6 +172,109 @@ Two-layer config merge: global (`~/.config/lazywt/config.toml`) + project (`lazy
 Project values override global. Both are optional. Pointer fields (`*bool`, `*string`)
 distinguish "not set" from zero values. Accessor methods (e.g., `ShellCmd()`) apply defaults.
 
+## CLI Interface for Scripting Agents
+
+`lw` exposes a non-TUI CLI that agents can call programmatically. All commands
+must be run from the lazywt project root (the directory containing `lazywt.toml`
+or the bare repo).
+
+### List worktrees
+
+```bash
+# Human-readable
+lw list
+
+# Machine-readable JSON (use this in scripts/agents)
+lw list --format=json
+```
+
+The JSON output is an array of `model.Worktree` objects:
+
+```json
+[
+  {
+    "Path": "/abs/path/to/worktrees/main",
+    "Branch": "main",
+    "Name": "main",
+    "IsMain": false,
+    "IsDirty": false,
+    "IsIntegrated": false,
+    "IsPathMissing": false,
+    "LastCommitHash": "a1b2c3f",
+    "LastCommitSubject": "fix: login bug",
+    "LastCommitFullHash": "a1b2c3f...",
+    "LastCommitAuthor": "Alice",
+    "LastCommitDate": "2024-01-15T10:30:00Z",
+    "TrackingBranch": "origin/main"
+  }
+]
+```
+
+### Create a worktree
+
+```bash
+lw create <branch>
+```
+
+- If `<branch>` exists locally, checks it out directly.
+- If `<branch>` exists only on `origin`, creates a local tracking branch.
+- If `<branch>` does not exist, creates a new branch from HEAD.
+- Prints the worktree path on success (useful for `cd $(lw create feat-x)`).
+- The directory name is sanitized: `/` and `\` in branch names are replaced with `-`.
+
+### Delete a worktree
+
+```bash
+lw delete <branch>
+```
+
+Removes the worktree for the given branch. Retries with `--force` if a clean
+removal fails. Prints the deleted path on success.
+
+### Open a worktree (run on_open hook)
+
+```bash
+lw open <branch>
+```
+
+Runs the `on_open` hooks configured in `lazywt.toml` for the worktree on the
+given branch. Prints the worktree path on success.
+
+### Initialize a new project
+
+```bash
+lw init <git-url>       # non-interactive
+lw init                 # interactive (prompts for URL and project name)
+```
+
+### Migrate an existing repo
+
+```bash
+lw migrate [path] [project-name]
+```
+
+Converts a standard cloned repo to the lazywt bare-repo layout. Creates a
+sibling directory with the bare repo, `worktrees/`, `scripts/`, and `lazywt.toml`.
+
+### Exit codes
+
+All commands exit `0` on success and `1` on error. Error messages go to stderr.
+
+### Example agent workflow
+
+```bash
+# List current worktrees as JSON
+worktrees=$(lw list --format=json)
+
+# Create a feature worktree and capture its path
+wt_path=$(lw create feature/my-thing)
+
+# Work in the worktree ...
+
+# Delete when done
+lw delete feature/my-thing
+```
+
 ## Agent-Specific Rules
 
 - **Always** run `go vet ./...` after editing Go files
