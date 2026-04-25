@@ -147,8 +147,10 @@ func EnrichWorktreesConcurrent(worktrees []model.Worktree, repoPath string) {
 			wt.TrackingBranch = tracking
 
 			// Integration check: is the branch's work already in the default branch?
-			// Skip the main worktree (it IS the default branch) and detached HEADs.
-			if !wt.IsMain && wt.Branch != "" && wt.Branch != defaultBranch {
+			// Skip the main worktree (it IS the default branch), detached HEADs,
+			// and dirty worktrees — uncommitted changes mean the work is not fully
+			// integrated regardless of what the committed HEAD looks like.
+			if !wt.IsMain && wt.Branch != "" && wt.Branch != defaultBranch && !dirty {
 				wt.IsIntegrated = IsIntegrated(repoPath, wt.Path, defaultBranch)
 			}
 		}(&worktrees[i])
