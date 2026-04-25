@@ -51,15 +51,23 @@ func (d *worktreeDelegate) Render(w io.Writer, m list.Model, index int, item lis
 	var parts []string
 	parts = append(parts, name)
 
-	if d.showPath && wt.Worktree.Path != "" {
+	if wt.Worktree.Branch != "" {
+		branch := wt.Worktree.Branch
+		// Dim the branch only when unselected; on the highlight background the
+		// dim color (240) becomes invisible.
+		if isSelected {
+			parts = append(parts, branch)
+		} else {
+			parts = append(parts, dimStyle.Render(branch))
+		}
+	} else if d.showPath && wt.Worktree.Path != "" {
+		// Fall back to path when there is no branch (detached HEAD).
 		p := wt.Worktree.Path
 		if d.pathStyle != "absolute" && d.projectRoot != "" {
 			if rel, err := filepath.Rel(d.projectRoot, p); err == nil {
 				p = rel
 			}
 		}
-		// Dim the path only when unselected; on the highlight background the
-		// dim color (240) becomes invisible.
 		if isSelected {
 			parts = append(parts, p)
 		} else {
