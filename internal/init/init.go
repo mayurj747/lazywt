@@ -9,6 +9,142 @@ import (
 	"strings"
 )
 
+// Migrate converts an existing standard git repo into a lazywt bare-repo layout.
+// sourcePath is the path to the existing cloned repo. projectName is optional —
+// if empty it is derived from the repo's remote URL or from the directory name.
+//
+// The resulting layout is created as a sibling directory of sourcePath:
+//
+//	<parent>/
+//	  <projectName>/          ← new lazywt project root
+//	    <projectName>.git/    ← bare clone of origin
+//	    worktrees/
+//	      <defaultBranch>/    ← worktree for the default branch
+//	    scripts/
+//	    lazywt.toml
+//
+// The original repo at sourcePath is not deleted; a message is printed
+// instructing the user to remove it once they are happy with the migration.
+func Migrate(sourcePath, projectName string) error {
+	if sourcePath == "" {
+		return fmt.Errorf("source path is required")
+	}
+
+	abs, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return fmt.Errorf("resolving source path: %w", err)
+	}
+
+	// Ensure the source is a git repo.
+	checkCmd := exec.Command("git", "-C", abs, "rev-parse", "--git-dir")
+	if err := checkCmd.Run(); err != nil {
+		return fmt.Errorf("%q is not a git repository", abs)
+	}
+
+	// Obtain the remote URL (prefer "origin").
+	remoteURL := remoteOriginURL(abs)
+
+	if projectName == "" {
+		if remoteURL != "" {
+			projectName = ExtractProjectName(remoteURL)
+		} else {
+			projectName = filepath.Base(abs)
+			projectName = strings.TrimSuffix(projectName, ".git")
+		}
+	}
+	if projectName == "" {
+		return fmt.Errorf("could not determine project name")
+	}
+
+	if remoteURL == "" {
+		return fmt.Errorf("no remote URL found in %q; lazywt migration requires a remote origin to clone bare from", abs)
+	}
+
+	// Place the new project as a sibling of sourcePath.
+	parentDir := filepath.Dir(abs)
+	projectDir := filepath.Join(parentDir, projectName)
+
+	if _, err := os.Stat(projectDir); err == nil {
+		return fmt.Errorf("directory %q already exists", projectDir)
+	}
+
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		return fmt.Errorf("creating project directory: %w", err)
+	}
+
+	// Clone bare repo from the remote.
+	bareDir := filepath.Join(projectDir, projectName+".git")
+	fmt.Printf("Cloning %s (bare) into %s ...\n", remoteURL, bareDir)
+	if err := gitCloneBare(remoteURL, bareDir); err != nil {
+		return fmt.Errorf("git clone --bare: %w", err)
+	}
+
+	// Detect default branch.
+	branch, err := detectDefaultBranch(bareDir)
+	if err != nil {
+		return fmt.Errorf("detecting default branch: %w", err)
+	}
+	fmt.Printf("Default branch: %s\n", branch)
+
+	// Create worktrees directory and check out default branch.
+	worktreesDir := filepath.Join(projectDir, "worktrees")
+	if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+		return fmt.Errorf("creating worktrees directory: %w", err)
+	}
+
+	wtPath := filepath.Join(worktreesDir, branch)
+	fmt.Printf("Creating worktree: %s\n", wtPath)
+	if err := gitWorktreeAdd(bareDir, wtPath, branch); err != nil {
+		return fmt.Errorf("git worktree add: %w", err)
+	}
+
+	// Create scripts directory.
+	scriptsDir := filepath.Join(projectDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
+		return fmt.Errorf("creating scripts directory: %w", err)
+	}
+
+	// Scaffold lazywt.toml.
+	configPath := filepath.Join(projectDir, "lazywt.toml")
+	if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
+		return fmt.Errorf("writing lazywt.toml: %w", err)
+	}
+
+	fmt.Printf("Project %q migrated.\n", projectName)
+	fmt.Printf("\nNext steps:\n")
+	fmt.Printf("  cd %s\n", projectDir)
+	fmt.Printf("  lw\n")
+	fmt.Printf("\nOnce you are satisfied, you can remove the original repo:\n")
+	fmt.Printf("  rm -rf %s\n", abs)
+	return nil
+}
+
+// remoteOriginURL returns the URL for the "origin" remote, or any remote if
+// "origin" is not present. Returns empty string if no remotes are configured.
+func remoteOriginURL(repoPath string) string {
+	// Try origin first.
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
+	if err == nil {
+		if u := strings.TrimSpace(string(out)); u != "" {
+			return u
+		}
+	}
+	// Fall back to first remote.
+	out, err = exec.Command("git", "-C", repoPath, "remote").Output()
+	if err != nil {
+		return ""
+	}
+	remotes := strings.Fields(string(out))
+	if len(remotes) == 0 {
+		return ""
+	}
+	out, err = exec.Command("git", "-C", repoPath, "remote", "get-url", remotes[0]).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 const defaultConfig = `# Hook environment variables:
 #   $LW_ACTION    — action being performed (create, delete, open, switch, prune)
 #   $LW_REPO_PATH — path to the bare repo / git dir

@@ -27,6 +27,8 @@ func main() {
 	switch os.Args[1] {
 	case "init":
 		runInit(os.Args[2:])
+	case "migrate":
+		runMigrate(os.Args[2:])
 	case "list":
 		runList(os.Args[2:])
 	case "create":
@@ -85,6 +87,31 @@ func runInit(args []string) {
 		os.Exit(1)
 	}
 }
+func runMigrate(args []string) {
+	if wantsHelp(args) {
+		printMigrateUsage()
+		return
+	}
+	if len(args) > 2 {
+		fmt.Fprintln(os.Stderr, "Error: usage: lw migrate [path] [project-name]")
+		os.Exit(1)
+	}
+
+	sourcePath := "."
+	var projectName string
+	if len(args) >= 1 {
+		sourcePath = args[0]
+	}
+	if len(args) >= 2 {
+		projectName = strings.TrimSpace(args[1])
+	}
+
+	if err := projectinit.Migrate(sourcePath, projectName); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func runTUI() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -409,6 +436,10 @@ func printOpenUsage() {
 	fmt.Print(openUsageText())
 }
 
+func printMigrateUsage() {
+	fmt.Print(migrateUsageText())
+}
+
 func wantsHelp(args []string) bool {
 	if len(args) != 1 {
 		return false
@@ -424,12 +455,13 @@ func wantsHelp(args []string) bool {
 func mainUsageText() string {
 	return strings.Join([]string{
 		"Usage:",
-		"  lw                         Run TUI",
-		"  lw init [url]              Initialize a lazywt project",
-		"  lw list [--format=json]    List worktrees",
-		"  lw create <branch>         Create a worktree",
-		"  lw delete <branch>         Delete a worktree by branch",
-		"  lw open <branch>           Run on_open hook for branch worktree",
+		"  lw                              Run TUI",
+		"  lw init [url]                   Initialize a lazywt project",
+		"  lw migrate [path] [name]        Migrate existing repo to lazywt layout",
+		"  lw list [--format=json]         List worktrees",
+		"  lw create <branch>              Create a worktree",
+		"  lw delete <branch>              Delete a worktree by branch",
+		"  lw open <branch>                Run on_open hook for branch worktree",
 		"",
 		"Help:",
 		"  lw <command> --help",
@@ -510,6 +542,35 @@ func openUsageText() string {
 		"",
 		"Example:",
 		"  lw open feat-x",
+		"",
+	}, "\n")
+}
+
+func migrateUsageText() string {
+	return strings.Join([]string{
+		"Usage:",
+		"  lw migrate [path] [project-name]",
+		"",
+		"Description:",
+		"  Migrate an existing standard git repo to the lazywt bare-repo layout.",
+		"  path defaults to the current directory.",
+		"  project-name defaults to the name derived from the remote URL.",
+		"",
+		"  The new lazywt project is created as a sibling of path:",
+		"    <parent>/",
+		"      <project-name>/          lazywt project root",
+		"        <project-name>.git/    bare clone",
+		"        worktrees/",
+		"          <default-branch>/",
+		"        scripts/",
+		"        lazywt.toml",
+		"",
+		"  The original repo is NOT deleted; instructions are printed at the end.",
+		"",
+		"Examples:",
+		"  lw migrate                   migrate repo in current directory",
+		"  lw migrate ~/repos/myrepo    migrate a specific repo",
+		"  lw migrate . myproject       migrate with an explicit project name",
 		"",
 	}, "\n")
 }
