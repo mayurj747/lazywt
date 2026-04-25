@@ -1169,16 +1169,26 @@ func (a *App) runDeleteAction() (tea.Model, tea.Cmd) {
 	return a, doDelete
 }
 
+// sanitizeBranchForPath converts a branch name to a safe directory name by
+// replacing path separators (/ and \) with dashes so that a branch like
+// "feature/my-thing" maps to a flat directory "feature-my-thing" rather than
+// creating a nested subdirectory.
+func sanitizeBranchForPath(branch string) string {
+	s := strings.ReplaceAll(branch, "/", "-")
+	s = strings.ReplaceAll(s, "\\", "-")
+	return s
+}
+
 func (a *App) runCreateAction(branch string) (tea.Model, tea.Cmd) {
 	a.state = StateNormal
 
 	defaultPath := a.cfg.DefaultPathDir()
-	wtPath := filepath.Join(a.projectRoot, defaultPath, branch)
+	wtPath := filepath.Join(a.projectRoot, defaultPath, sanitizeBranchForPath(branch))
 
 	worktree := &model.Worktree{
 		Path:   wtPath,
 		Branch: branch,
-		Name:   branch,
+		Name:   sanitizeBranchForPath(branch),
 	}
 
 	a.textInput.Reset()
