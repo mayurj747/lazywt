@@ -1112,7 +1112,7 @@ func (a *App) handleDeleteRequest() (tea.Model, tea.Cmd) {
 	}
 
 	if worktree.IsMain {
-		a.sendOutput("stderr", "Cannot delete main worktree", "info")
+		a.sendOutput("stderr", "Cannot delete the main worktree. Press 'v' for details.", "info")
 		return a, nil
 	}
 
@@ -1440,8 +1440,21 @@ func (a *App) detailsOverlay() string {
 		"",
 		"Tracking: " + worktree.TrackingBranch,
 		"",
-		"Press q or Esc to close",
 	}
+
+	if worktree.IsMain {
+		lines = append(lines,
+			"Note: this is the main worktree and cannot be deleted.",
+			"      Git hard-codes one worktree as the main entry and does not",
+			"      allow it to be removed with 'git worktree remove'.",
+			"      In the typical lazywt bare-repo layout the bare repo itself",
+			"      is the main entry and is filtered from this list, so all",
+			"      visible worktrees are freely deletable.",
+			"",
+		)
+	}
+
+	lines = append(lines, "Press q or Esc to close")
 
 	content := lipgloss.NewStyle().
 		Width(a.width - 6).
