@@ -1,6 +1,7 @@
 ---
 name: lazyworktree
-description: Manage git worktrees in a lazywt (lazyworktree) project using the lw CLI — create, list, delete, and open worktrees programmatically
+version: 2
+description: Safely manage git worktrees in a lazywt project using the lw CLI from anywhere inside the project — including from inside a worktree or the bare repo
 license: MIT
 compatibility: opencode
 metadata:
@@ -10,38 +11,114 @@ metadata:
 
 ## What I do
 
-Teach agents how to manage git worktrees in a **lazyworktree** project using
-the `lw` CLI. This covers listing, creating, deleting, and opening worktrees
-without touching the TUI.
+Teach agents how to manage git worktrees in a **lazywt (lazyworktree)** project
+using the `lw` CLI, regardless of where the agent is currently running — inside a
+worktree, inside the bare repo, or at the project root.
+
+**Core rule:** `lw` commands must run from the **project root** (the directory
+containing `lazywt.toml`). This skill shows you how to discover that root from
+anywhere inside the project so your `lw` calls always do the right thing.
 
 ## When to use me
 
-Use this skill whenever you are working inside a lazywt-managed project and
-need to create a worktree for a branch, clean up merged worktrees, or inspect
-what worktrees currently exist.
+- Creating, deleting, listing, or opening worktrees via `lw` CLI
+- Agent is invoked from inside a worktree or nested path
+- Scripting lazywt operations from a subdomain, plugin, or IDE context that runs
+  inside a worktree
 
 ---
 
 ## Project layout
 
-A lazywt project looks like this:
-
 ```
-<project-name>/
-  <project-name>.git/   # bare git repo
-  worktrees/            # all linked worktrees live here
-    main/               # default-branch worktree
-    feat-x/             # one directory per worktree
-  scripts/              # optional hook scripts
-  lazywt.toml           # project config (hooks, display, general settings)
+<project-name>/                    # project root — WHERE lw MUST RUN
+  <project-name>.git/              # bare git repo
+  worktrees/                       # all linked worktrees
+    main/                          # default-branch worktree
+    feat-x/                        # one directory per branch/worktree
+  scripts/                         # optional hook scripts
+  lazywt.toml                      # config (hooks, display, general)
 ```
 
-All `lw` commands must be run from the **project root** — the directory that
-contains `lazywt.toml` (or the bare repo, if there is no config file).
+**Key point:** `lazywt.toml` lives at the project root. That file is the
+anchor for finding the root from anywhere inside the project.
+
+---
+
+## Finding the project root safely
+
+`lw` commands resolve the bare-repo path correctly even when run from inside a
+worktree (see `ResolveRepoPath` in `internal/git/worktree.go`). **However**, the
+`projectRoot` used to construct worktree paths (in `runCreate`, `resolvePaths`)
+is simply `os.Getwd()`. This means if you call `lw create` from inside a
+worktree, the new worktree gets nested inside the current one — wrong.
+
+**Always cd to the project root before running `lw`.**
+
+### Method 1: findup to `lazywt.toml` (preferred)
+
+From any shell or script, find the project root by walking upward until
+`lazywt.toml` is found:
+
+```bash
+# Find project root containing lazywt.toml
+find_lw_root() {
+  dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/lazywt.toml" ]; then
+      echo "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo "Error: could not find lazywt.toml" >&2
+  return 1
+}
+
+# Store root once, use it for every lw call
+LW_ROOT=$(find_lw_root)
+cd "$LW_ROOT" || exit 1
+
+# Now all lw commands are safe
+lw list --format=json
+lw create feature/my-thing
+lw delete feature/my-thing
+```
+
+### Method 2: use `git rev-parse` + layout heuristics
+
+If you are inside a worktree and `lazywt.toml` is not visible (e.g. it is
+ignored or located differently), derive the root from the repo layout:
+
+```bash
+# Inside a worktree, find the bare repo's parent directory
+BARE_REPO=$(git rev-parse --git-common-dir)
+# If BARE_REPO is a relative path (e.g. ".git"), resolve it
+[ "${BARE_REPO#/}" = "$BARE_REPO" ] && BARE_REPO="$(cd "$BARE_REPO" && pwd)"
+# In lazywt layout, project root is the parent of the bare repo
+LW_ROOT=$(dirname "$BARE_REPO")
+cd "$LW_ROOT" || exit 1
+```
+
+### Method 3: prefix every `lw` call (if shell state must not change)
+
+If changing `cd` globally is problematic, prefix each command:
+
+```bash
+LW_ROOT=$(find_lw_root)
+
+project="$LW_ROOT" lw list --format=json
+# ... or use subshells so state is isolated
+(cd "$LW_ROOT" && lw create feature/my-thing)
+```
+
+**Choose Method 1 for readability, Method 3 for isolation.**
 
 ---
 
 ## CLI reference
+
+All commands below assume you have first `cd`d to `$LW_ROOT`.
 
 ### List worktrees
 
@@ -67,7 +144,7 @@ JSON shape (`[]model.Worktree`):
     "IsPathMissing": false,
     "LastCommitHash": "a1b2c3f",
     "LastCommitSubject": "fix: login bug",
-    "LastCommitFullHash": "a1b2c3fabcdef...",
+    "LastCommitFullHash": "a1b2c3f...",
     "LastCommitAuthor": "Alice",
     "LastCommitDate": "2024-01-15T10:30:00Z",
     "TrackingBranch": "origin/main"
@@ -76,9 +153,10 @@ JSON shape (`[]model.Worktree`):
 ```
 
 Key fields to check:
-- `IsDirty` — worktree has uncommitted changes
-- `IsIntegrated` — branch work is already merged into the default branch
-- `IsPathMissing` — worktree directory no longer exists on disk (stale)
+- `IsDirty` — uncommitted changes present
+- `IsIntegrated` — branch work already merged into default branch (only true
+  when **not** dirty)
+- `IsPathMissing` — worktree directory no longer exists on disk (stale entry)
 
 ### Create a worktree
 
@@ -87,17 +165,16 @@ lw create <branch>
 ```
 
 - Existing local branch → checked out directly
-- Branch only on `origin` → local tracking branch is created
-- Branch not found anywhere → new branch from HEAD
-- Prints the worktree **path** on success
+- Branch only on `origin` → local tracking branch created
+- Branch not found anywhere → new branch created from HEAD
+- Prints the worktree **absolute path** on success
 
 Branch name sanitization: `/` and `\` are replaced with `-` in the directory
-name, so `feature/my-thing` lands at `worktrees/feature-my-thing`.
+name, so `feature/my-thing` becomes `worktrees/feature-my-thing/`.
 
 ```bash
-# Capture the path for later use
 wt_path=$(lw create feature/my-thing)
-echo "Worktree is at: $wt_path"
+echo "Created at: $wt_path"
 ```
 
 ### Delete a worktree
@@ -107,9 +184,9 @@ lw delete <branch>
 ```
 
 - Removes the worktree for the given branch
-- Retries with `--force` automatically if a clean removal fails
+- Retries with `--force` automatically if clean removal fails
 - Prints the deleted path on success
-- The **main worktree cannot be deleted** (git hard-codes this restriction)
+- **Cannot delete the main worktree** (git-enforced restriction)
 
 ### Open a worktree (fire on_open hook)
 
@@ -123,8 +200,8 @@ prints its path on success.
 ### Initialize a new project
 
 ```bash
-lw init <git-url>   # non-interactive
-lw init             # interactive (prompts for URL and optional project name)
+lw init <git-url>       # non-interactive
+lw init                 # interactive (prompts for URL and project name)
 ```
 
 ### Migrate an existing standard repo
@@ -133,7 +210,7 @@ lw init             # interactive (prompts for URL and optional project name)
 lw migrate [path] [project-name]
 ```
 
-Converts a regular cloned repo to the lazywt bare-repo layout. Creates a
+Converts a regular cloned repo to the lazywt bare-repo layout, creating a
 sibling directory with the bare repo, `worktrees/`, `scripts/`, and
 `lazywt.toml`. The original repo is left intact.
 
@@ -148,19 +225,43 @@ sibling directory with the bare repo, `worktrees/`, `scripts/`, and
 
 ---
 
-## Typical agent workflow
+## Typical safe agent workflow
 
 ```bash
-# 1. Check what worktrees currently exist
-lw list --format=json
+#!/bin/bash
+set -euo pipefail
 
-# 2. Create a feature worktree
+# 1. Anchor ourselves at the project root
+find_lw_root() {
+  dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/lazywt.toml" ]; then
+      echo "$dir"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo "Error: could not find lazywt.toml" >&2
+  return 1
+}
+
+LW_ROOT=$(find_lw_root)
+cd "$LW_ROOT"
+
+# 2. Inspect current state
+worktrees=$(lw list --format=json)
+
+# 3. Create a feature worktree
+cd "$LW_ROOT"
 wt_path=$(lw create feature/my-thing)
-# wt_path is now /abs/path/to/worktrees/feature-my-thing
+# wt_path is absolute, e.g. /abs/path/to/worktrees/feature-my-thing
 
-# 3. Do work inside the worktree ...
+# 4. Do work inside the worktree
+cd "$wt_path"
+# ... edit files, run tests, etc.
 
-# 4. Delete when done (after merging)
+# 5. Return to root and delete when done
+cd "$LW_ROOT"
 lw delete feature/my-thing
 ```
 
@@ -202,10 +303,16 @@ Hook environment variables available in every hook:
 
 ## Notes and gotchas
 
-- Always run `lw` from the **project root** (directory containing `lazywt.toml`)
+- **Always anchor to the project root before `lw` calls.** Running `lw create`
+  from inside a worktree will nest the new worktree inside the current one.
+- `lazywt.toml` is the reliable anchor; if your environment may not have it
+  visible, fall back to the `git rev-parse --git-common-dir` → `dirname`
+  heuristic.
 - The main worktree (the bare repo entry) is filtered from the TUI list and
-  **cannot be deleted** — all user-visible worktrees are linked and freely removable
-- `IsIntegrated` is only `true` when the worktree is **not dirty** — dirty
-  worktrees are never considered merged even if HEAD is an ancestor
-- Branch names with `/` or `\` are sanitized to `-` in the directory name but
-  the original branch name is preserved in git and in all `lw` commands
+  **cannot be deleted**.
+- `IsIntegrated` is only `true` when the worktree is **not dirty**.
+- Branch names with `/` or `\` are sanitized to `-` in directory names but the
+  original branch name is preserved in git and all `lw` commands.
+- `lw` does not auto-commit, auto-push, or auto-stash. If a worktree is dirty,
+  `lw delete` with `--force` may still succeed, but consider warning the user
+  about uncommitted work first.
